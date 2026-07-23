@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProbeGate — per-span 探针兜底门</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #1a1d24;
+      --ink: #f5f5f7;
+      --dim: #a1a1a8;
+      --line: #2a2e38;
+      --primary: #4da3ff;
+      --proceed: #2dc79a;
+      --abstain: #f0b429;
+      --handoff: #ff6b6b;
+      --probe-pass: #2dc79a;
+      --probe-fail: #ff6b6b;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f5f7;
+        --card: #ffffff;
+        --ink: #1d1d1f;
+        --dim: #6e6e73;
+        --line: #e3e3e8;
+        --primary: #0071e3;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+    header {
+      padding: 28px 24px 8px;
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+    header h1 { margin: 0; font-size: 22px; }
+    header p { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
+    main { max-width: 1080px; margin: 0 auto; padding: 16px 24px 80px; }
+    .controls {
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: end;
+      margin-bottom: 20px;
+    }
+    label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 4px; }
+    input, select, button {
+      font: inherit; color: var(--ink); background: var(--card);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px 10px;
+    }
+    button { cursor: pointer; border-color: var(--primary); color: var(--primary); }
+    button:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card[data-rule="proceed"]  { border-left: 4px solid var(--proceed); }
+    .card[data-rule="abstain"]  { border-left: 4px solid var(--abstain); }
+    .card[data-rule="handoff"]  { border-left: 4px solid var(--handoff); box-shadow: 0 0 0 1px var(--handoff); }
+    .card .step { font-size: 12px; color: var(--dim); }
+    .card h3 { margin: 4px 0 8px; font-size: 15px; }
+    .pill {
+      display: inline-block; font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 999px; margin-right: 6px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .pill.rule-proceed { color: var(--proceed); background: color-mix(in srgb, var(--proceed) 16%, transparent); }
+    .pill.rule-abstain { color: var(--abstain); background: color-mix(in srgb, var(--abstain) 18%, transparent); }
+    .pill.rule-handoff { color: var(--handoff); background: color-mix(in srgb, var(--handoff) 18%, transparent); }
+    .pill.probe-pass { color: var(--probe-pass); }
+    .pill.probe-fail { color: var(--probe-fail); }
+    .meta { font-size: 12px; color: var(--dim); margin: 8px 0; }
+    .bar { height: 6px; border-radius: 3px; background: var(--line); margin: 6px 0 10px; overflow: hidden; }
+    .bar > i { display: block; height: 100%; background: var(--primary); }
+    pre {
+      background: color-mix(in srgb, var(--card) 80%, black);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px 10px; font-size: 12px; overflow-x: auto;
+      max-height: 180px;
+    }
+    .actions { margin-top: 12px; display: flex; gap: 8px; }
+    .actions button { border-color: var(--line); color: var(--ink); }
+    .actions button.approve { color: var(--proceed); border-color: var(--proceed); }
+    .actions button.reject  { color: var(--handoff); border-color: var(--handoff); }
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--card); border: 1px solid var(--line);
+      padding: 10px 16px; border-radius: 10px; font-size: 13px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.25); display: none;
+    }
+    .handoff-only { display: none; }
+    .card[data-rule="handoff"] .handoff-only { display: flex; }
+    .summary { margin-bottom: 16px; color: var(--dim); font-size: 13px; }
+    .err { color: var(--handoff); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ProbeGate — per-span 探针兜底门</h1>
+    <p>把模型自报不确定度与机器可校验探针配对，仅当双信号同时触发才路由人工。</p>
+  </header>
+
+  <main>
+    <div class="controls">
+      <div>
+        <label>probe</label>
+        <select id="probe">
+          <option value="compile">compile</option>
+          <option value="test">test</option>
+          <option value="lint">lint</option>
+          <option value="schema">schema</option>
+        </select>
+      </div>
+      <div>
+        <label>tau (uncertainty)</label>
+        <input id="tau" type="number" step="0.05" min="0" max="1" value="0.5" />
+      </div>
+      <div>
+        <label>model target</label>
+        <select id="model">
+          <option>deepseek-coder</option>
+          <option>qwen3-coder</option>
+          <option>glm-5</option>
+        </select>
+      </div>
+      <div>
+        <button id="run">run demo agent</button>
+      </div>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="grid" id="grid"></div>
+    <div class="toast" id="toast"></div>
+  </main>
+
+  <script>
+    const grid = document.getElementById("grid");
+    const summary = document.getElementById("summary");
+    const toast = document.getElementById("toast");
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.style.display = "block";
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => { toast.style.display = "none"; }, 2200);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function card(decision, span) {
+      const rule = decision.rule;
+      const probe = decision.probe || {};
+      const probeName = probe.probe || "—";
+      const probeState = probe.passed ? "pass" : "fail";
+      const probeLabel = probe.passed ? "PASS" : "FAIL";
+      const unc = (decision.uncertainty ?? 0);
+      const pct = Math.min(100, Math.round(unc * 100));
+      const div = document.createElement("div");
+      div.className = "card";
+      div.setAttribute("data-rule", rule);
+      div.setAttribute("data-span", decision.span_id);
+
+      const actions = rule === "handoff"
+        ? `<div class="actions handoff-only">
+             <button class="approve" data-act="approve">approve</button>
+             <button class="reject" data-act="reject">reject</button>
+           </div>` : "";
+
+      div.innerHTML = `
+        <div class="step">span ${escapeHtml(decision.span_id)} · step ${escapeHtml(span ? span.agent_step : "?")}</div>
+        <h3>${escapeHtml(decision.span_id)}</h3>
+        <div>
+          <span class="pill rule-${rule}">${rule}</span>
+          <span class="pill probe-${probeState}">${probeName} ${probeLabel}</span>
+        </div>
+        <div class="meta">uncertainty ${unc.toFixed(2)}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="meta">${escapeHtml(decision.rationale)}</div>
+        <pre>${escapeHtml(span ? span.content : "")}</pre>
+        ${actions}
+      `;
+
+      div.querySelectorAll("button[data-act]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const act = btn.getAttribute("data-act");
+          const res = await fetch(`/api/${act}?span_id=${encodeURIComponent(decision.span_id)}`, { method: "POST" });
+          const out = await res.json();
+          showToast(`${act}: ${out.span_id} → ${out.rule}`);
+          if (act === "reject") {
+            div.style.opacity = "0.55";
+          } else {
+            div.setAttribute("data-rule", "proceed");
+            div.querySelector(".rule-handoff")?.classList.replace("rule-handoff", "rule-proceed");
+            div.querySelector(".handoff-only")?.remove();
+          }
+        });
+      });
+      return div;
+    }
+
+    async function run() {
+      grid.innerHTML = "<div class=\"meta\">running…</div>";
+      const probe = document.getElementById("probe").value;
+      const tau = parseFloat(document.getElementById("tau").value);
+      const model = document.getElementById("model").value;
+      try {
+        const res = await fetch("/api/demo");
+        const data = await res.json();
+        // re-run the gate with current controls via /api/guard so the UI
+        // reflects the operator's probe/tau choice, not just the default.
+        const guard = await fetch("/api/guard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spans: data.spans,
+            uncertainty_threshold: tau,
+            probe: probe,
+            model_target: model,
+          }),
+        });
+        const gdata = await guard.json();
+        grid.innerHTML = "";
+        const decisions = gdata.decisions;
+        const counts = { proceed: 0, abstain: 0, handoff: 0 };
+        decisions.forEach((d, i) => {
+          counts[d.rule] = (counts[d.rule] || 0) + 1;
+          grid.appendChild(card(d, data.spans[i]));
+        });
+        summary.innerHTML = `<b>${decisions.length}</b> spans ·
+          <span style="color:var(--proceed)">${counts.proceed} proceed</span> ·
+          <span style="color:var(--abstain)">${counts.abstain} abstain</span> ·
+          <span style="color:var(--handoff)">${counts.handoff} handoff</span>`;
+      } catch (e) {
+        grid.innerHTML = `<div class="err">failed to load demo: ${escapeHtml(String(e))}</div>`;
+      }
+    }
+
+    document.getElementById("run").addEventListener("click", run);
+    run();
+  </script>
+</body>
+</html>
