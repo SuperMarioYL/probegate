@@ -45,6 +45,11 @@ class LintProbe(Probe):
                 violations.append(
                     f"line {node.lineno}: `assert` is not validation; use a real check"
                 )
+            elif isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print":
+                # ``print`` left in module body is advertised as a violation;
+                # a bare ``print(...)`` call (not ``obj.print``) is the barreling
+                # smell the docstring promises to catch.
+                violations.append(f"line {node.lineno}: `print(...)` left in module body")
 
         if violations:
             return ProbeResult(probe="lint", passed=False, evidence="; ".join(violations))

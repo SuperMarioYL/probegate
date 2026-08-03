@@ -8,7 +8,7 @@ from .models import Span, ProbeResult, GateDecision, ProbeGateConfig
 from .gate import ProbeGate
 from .uncertainty import UncertaintyAdapter
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Span",
