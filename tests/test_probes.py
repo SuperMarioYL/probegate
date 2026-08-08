@@ -11,13 +11,18 @@ so CI asserts the parse without live API keys.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import math
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+from probegate.audit import LocalAuditLog
+from probegate.cli import _load_config, _resolve_gate_config, main
+from probegate.gate import ProbeGate
 from probegate.models import ProbeGateConfig, Span
 from probegate.probes.lint_probe import LintProbe
 from probegate.probes.schema_probe import SchemaProbe
@@ -27,6 +32,7 @@ from probegate.uncertainty import (
     UncertaintyFetchError,
     parse_logprob_uncertainty,
 )
+from probegate.ui.web import app, set_audit_log
 
 
 def _span(content: str, *, id: str = "s", step: int = 1) -> Span:
@@ -297,3 +303,284 @@ class TestUncertaintyLogprobContract:
         adapter = UncertaintyAdapter(cfg, transport=httpx.MockTransport(handler))
         with pytest.raises(httpx.HTTPStatusError):
             asyncio.run(adapter.fetch_logprob(_span("hi")))
+
+
+# ==========================================================================
+# v0.3.0 — fix-init-config-never-read: .probegate.toml values flow into the
+# gate, and explicit CLI flags win over the config file.
+# ==========================================================================
+
+
+def _ns(**kwargs: object) -> argparse.Namespace:
+    """An argparse.Namespace with the gate-config flags all defaulting to None."""
+    defaults = {
+        "threshold": None,
+        "probe": None,
+        "model": None,
+        "api_key": None,
+        "base_url": None,
+    }
+    defaults.update(kwargs)
+    return argparse.Namespace(**defaults)
+
+
+class TestInitConfigLoadContract:
+    def test_load_config_returns_none_when_absent(self, tmp_path: object) -> None:
+        assert _load_config(f"{tmp_path}/.probegate.toml") is None
+
+    def test_init_writes_then_load_reads_back_values(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        # the documented happy path: init -> edit api_key/base_url -> load
+        monkeypatch.chdir(str(tmp_path))
+        rc = main([
+            "init", "--threshold", "0.2", "--probe", "lint",
+            "--model", "qwen3-coder", "--api-key", "k", "--base-url", "https://x/v1",
+        ])
+        assert rc == 0
+        cfg = _load_config(f"{tmp_path}/.probegate.toml")
+        assert cfg is not None
+        assert cfg.uncertainty_threshold == 0.2
+        assert cfg.probe == "lint"
+        assert cfg.model_target == "qwen3-coder"
+        assert cfg.api_key == "k"
+        assert cfg.base_url == "https://x/v1"
+
+    def test_toml_values_flow_into_probe_gate(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        # the v0.2.0 flagship logprob feature was unreachable end-to-end because
+        # no subcommand read .probegate.toml back. Now api_key/base_url flow in.
+        monkeypatch.chdir(str(tmp_path))
+        main(["init", "--threshold", "0.2", "--probe", "lint", "--api-key", "k", "--base-url", "https://x/v1"])
+        base = _load_config(f"{tmp_path}/.probegate.toml")
+        assert base is not None
+        gate = ProbeGate(config=base)
+        assert gate.config.uncertainty_threshold == 0.2
+        assert gate.config.probe == "lint"
+        assert gate.config.api_key == "k"
+        assert gate.config.base_url == "https://x/v1"
+        # the gate's uncertainty adapter sees the same config (m3 creds reachable)
+        assert gate.adapter.config.api_key == "k"
+
+    def test_flag_wins_over_config(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(str(tmp_path))
+        main(["init", "--threshold", "0.2", "--probe", "lint"])
+        base = _load_config(f"{tmp_path}/.probegate.toml")
+        # explicit --threshold flag overrides config's 0.2; --probe left None
+        # falls back to the config's "lint".
+        cfg = _resolve_gate_config(_ns(threshold=0.7), base=base)
+        assert cfg.uncertainty_threshold == 0.7
+        assert cfg.probe == "lint"
+
+    def test_no_config_no_flag_uses_defaults(self, tmp_path: object) -> None:
+        base = _load_config(f"{tmp_path}/.probegate.toml")  # None — no file
+        cfg = _resolve_gate_config(_ns(), base=base)
+        assert cfg.uncertainty_threshold == 0.5
+        assert cfg.probe == "compile"
+        assert cfg.model_target == "deepseek-coder"
+
+    def test_config_flag_override_sets_creds(self, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        # --api-key/--base-url on a subcommand reach the gate even with no toml
+        base = _load_config(f"{tmp_path}/.probegate.toml")  # None
+        cfg = _resolve_gate_config(_ns(api_key="flag-key", base_url="https://y/v1"), base=base)
+        assert cfg.api_key == "flag-key"
+        assert cfg.base_url == "https://y/v1"
+
+
+# ==========================================================================
+# v0.3.0 — fix-schema-probe-malformed-schema: validate the schema block's
+# shape (required=list, types=dict) instead of crashing or mis-parsing.
+# ==========================================================================
+
+
+class TestSchemaProbeMalformedShapeContract:
+    def test_array_form_types_does_not_crash(self) -> None:
+        # JSON-Schema array form: types is a list, not a dict. Before v0.3.0
+        # types.get(key) raised AttributeError (list has no .get) -> raw traceback.
+        code = (
+            "```probegate:schema\n"
+            '{"required": ["x"], "types": ["string"]}\n'
+            "```\n"
+            "```probegate:payload\n"
+            '{"x": "v"}\n'
+            "```\n"
+        )
+        result = SchemaProbe().run(_span(code))
+        assert result.probe == "schema"
+        assert result.passed is False
+        assert "malformed" in result.evidence
+
+    def test_string_form_required_does_not_iterate_chars(self) -> None:
+        # {"required": "endpoint"} — required is a string, not a list. Before
+        # v0.3.0 the for-loop iterated characters, emitting misleading evidence
+        # "missing required key e; n; ...; t" (false negative with misleading
+        # evidence — the exact class v0.2.0 closed for unknown types).
+        code = (
+            "```probegate:schema\n"
+            '{"required": "endpoint"}\n'
+            "```\n"
+            "```probegate:payload\n"
+            '{"endpoint": "/v1/chat"}\n'
+            "```\n"
+        )
+        result = SchemaProbe().run(_span(code))
+        assert result.probe == "schema"
+        assert result.passed is False
+        assert "malformed" in result.evidence
+        assert "missing required key e" not in result.evidence
+
+    def test_well_shaped_schema_still_validates(self) -> None:
+        # regression: the new shape guard must not break the happy path
+        code = (
+            "```probegate:schema\n"
+            '{"required": ["endpoint"], "types": {"endpoint": "string"}}\n'
+            "```\n"
+            "```probegate:payload\n"
+            '{"endpoint": "/v1/chat"}\n'
+            "```\n"
+        )
+        result = SchemaProbe().run(_span(code))
+        assert result.passed is True
+        assert "type-checked" in result.evidence
+
+    def test_schema_with_no_types_field_still_ok(self) -> None:
+        # types absent -> defaults to {} -> isinstance({}, dict) is True -> no
+        # false malformed failure. Pins the absent-field path.
+        code = (
+            "```probegate:schema\n"
+            '{"required": ["endpoint"]}\n'
+            "```\n"
+            "```probegate:payload\n"
+            '{"endpoint": "/v1/chat"}\n'
+            "```\n"
+        )
+        result = SchemaProbe().run(_span(code))
+        assert result.passed is True
+
+
+# ==========================================================================
+# v0.3.0 — fix-web-guard-validation-500: /api/guard returns 422 (not 500) for
+# a bad probe name / out-of-range threshold / bad model_target.
+# ==========================================================================
+
+
+def _web_span(span_id: str = "s", step: int = 1) -> dict[str, object]:
+    return {"id": span_id, "agent_step": step, "content": "x = 1\n", "uncertainty": 0.1}
+
+
+class TestWebGuardValidationContract:
+    def test_bad_probe_name_returns_422_not_500(self, tmp_path: object) -> None:
+        set_audit_log(LocalAuditLog(path=f"{tmp_path}/audit.jsonl"))
+        client = TestClient(app)
+        body = {"spans": [_web_span()], "probe": "nope", "uncertainty_threshold": 0.5, "model_target": "deepseek-coder"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 422
+
+    def test_out_of_range_threshold_returns_422_not_500(self, tmp_path: object) -> None:
+        set_audit_log(LocalAuditLog(path=f"{tmp_path}/audit.jsonl"))
+        client = TestClient(app)
+        body = {"spans": [_web_span()], "probe": "compile", "uncertainty_threshold": 99.0, "model_target": "deepseek-coder"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 422
+
+    def test_negative_threshold_returns_422(self, tmp_path: object) -> None:
+        set_audit_log(LocalAuditLog(path=f"{tmp_path}/audit.jsonl"))
+        client = TestClient(app)
+        body = {"spans": [_web_span()], "probe": "compile", "uncertainty_threshold": -0.1, "model_target": "deepseek-coder"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 422
+
+    def test_bad_model_target_returns_422(self, tmp_path: object) -> None:
+        set_audit_log(LocalAuditLog(path=f"{tmp_path}/audit.jsonl"))
+        client = TestClient(app)
+        body = {"spans": [_web_span()], "probe": "compile", "uncertainty_threshold": 0.5, "model_target": "gpt-4"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 422
+
+    def test_valid_body_returns_200(self, tmp_path: object) -> None:
+        set_audit_log(LocalAuditLog(path=f"{tmp_path}/audit.jsonl"))
+        client = TestClient(app)
+        body = {"spans": [_web_span()], "probe": "compile", "uncertainty_threshold": 0.5, "model_target": "deepseek-coder"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 200
+        assert "decisions" in r.json()
+
+
+# ==========================================================================
+# v0.3.0 — feat-local-audit-log-stub: each GateDecision + operator action is
+# appended to the local audit jsonl (OSS, NOT the Team paid export).
+# ==========================================================================
+
+
+class TestLocalAuditLogContract:
+    def test_append_decision_writes_jsonl(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        gate = ProbeGate(probe="compile", uncertainty_threshold=0.5)
+        d = gate.guard(Span(id="s1", agent_step=1, content="x = 1\n", uncertainty=0.1))
+        log.append_decision(d)
+        records = log.read()
+        assert len(records) == 1
+        assert records[0]["type"] == "decision"
+        assert records[0]["span_id"] == "s1"
+        assert records[0]["rule"] == "proceed"
+        assert "probe" in records[0]
+        assert "uncertainty" in records[0]
+
+    def test_append_many_writes_one_line_each(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        gate = ProbeGate(probe="compile", uncertainty_threshold=0.5)
+        decisions = [
+            gate.guard(Span(id=f"s{i}", agent_step=i, content="x = 1\n", uncertainty=0.1))
+            for i in range(3)
+        ]
+        log.append_decision_many(decisions)
+        records = log.read()
+        assert len(records) == 3
+        assert [r["span_id"] for r in records] == ["s0", "s1", "s2"]
+
+    def test_append_action_writes_jsonl(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        log.append_action("s1", "approved", "proceed")
+        records = log.read()
+        assert len(records) == 1
+        assert records[0] == {
+            "type": "action", "span_id": "s1", "action": "approved", "rule": "proceed",
+        }
+
+    def test_guard_endpoint_appends_decisions(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        set_audit_log(log)
+        client = TestClient(app)
+        body = {"spans": [_web_span("s1")], "probe": "compile", "uncertainty_threshold": 0.5, "model_target": "deepseek-coder"}
+        r = client.post("/api/guard", json=body)
+        assert r.status_code == 200
+        records = log.read()
+        assert len(records) == 1
+        assert records[0]["type"] == "decision"
+        assert records[0]["span_id"] == "s1"
+
+    def test_demo_endpoint_appends_decisions(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        set_audit_log(log)
+        client = TestClient(app)
+        r = client.get("/api/demo")
+        assert r.status_code == 200
+        records = log.read()
+        # the built-in demo agent has 5 spans => 5 decision records
+        assert len(records) == 5
+        assert all(rec["type"] == "decision" for rec in records)
+
+    def test_approve_and_reject_persist_actions(self, tmp_path: object) -> None:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        set_audit_log(log)
+        client = TestClient(app)
+        client.post("/api/approve?span_id=s4")
+        client.post("/api/reject?span_id=s5")
+        records = log.read()
+        assert len(records) == 2
+        assert records[0]["action"] == "approved"
+        assert records[0]["rule"] == "proceed"
+        assert records[1]["action"] == "rejected"
+        assert records[1]["rule"] == "rewind"
+
+    def test_default_path_is_probegate_audit_jsonl(self) -> None:
+        # the DEFAULT_AUDIT_PATH is the OSS-local location, NOT a Team export
+        from probegate.audit import DEFAULT_AUDIT_PATH
+        assert str(DEFAULT_AUDIT_PATH) == ".probegate/audit.jsonl"

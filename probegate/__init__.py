@@ -7,8 +7,9 @@ fire: ``handoff <=> uncertainty > tau AND not probe.passed``.
 from .models import Span, ProbeResult, GateDecision, ProbeGateConfig
 from .gate import ProbeGate
 from .uncertainty import UncertaintyAdapter
+from .audit import LocalAuditLog
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Span",
@@ -17,5 +18,6 @@ __all__ = [
     "ProbeGateConfig",
     "ProbeGate",
     "UncertaintyAdapter",
+    "LocalAuditLog",
     "__version__",
 ]

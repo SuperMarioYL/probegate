@@ -111,11 +111,90 @@ def _toml_dump(cfg: ProbeGateConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+# v0.3.0 (fix-init-config-never-read): cmd_init writes .probegate.toml but no
+# subcommand read it back, so the documented init->edit->wrap happy path was
+# non-functional end-to-end (and the v0.2.0 flagship logprob feature was
+# unreachable through the shipped CLI). tomllib is stdlib on >=3.11; pyproject
+# floor is >=3.10, so guard a tomli fallback for 3.10 only.
+try:  # pragma: no cover - branch depends on interpreter version
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - py3.10 only
+    import tomli as tomllib  # type: ignore[no-redef]
+
+_CONFIG_KEYS = {
+    "uncertainty_threshold",
+    "probe",
+    "model_target",
+    "handoff_mode",
+    "api_key",
+    "base_url",
+}
+
+
+def _load_config(path: str | Path = ".probegate.toml") -> ProbeGateConfig | None:
+    """Load ``.probegate.toml`` into a :class:`ProbeGateConfig`; ``None`` if absent.
+
+    Unknown keys are ignored so a hand-edited comment or extra field does not
+    crash the load. A present-but-malformed value (e.g. an out-of-range
+    threshold) lets the underlying pydantic ``ValidationError`` propagate —
+    it is a ``ValueError`` subclass, caught by :func:`main`'s guard.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return None
+    with p.open("rb") as fh:
+        data = tomllib.load(fh)
+    filtered = {k: v for k, v in data.items() if k in _CONFIG_KEYS}
+    if not filtered:
+        return None
+    return ProbeGateConfig(**filtered)
+
+
+def _resolve_gate_config(
+    args: argparse.Namespace,
+    *,
+    base: ProbeGateConfig | None,
+) -> ProbeGateConfig:
+    """Merge a loaded ``.probegate.toml`` (``base``) with explicit CLI flags.
+
+    A flag left at its argparse default of ``None`` means "not set by the user";
+    fall back to the config value, then to the hard-coded default. An explicit
+    flag always wins over the config file (flag wins).
+    """
+    threshold = (
+        args.threshold
+        if args.threshold is not None
+        else (base.uncertainty_threshold if base else 0.5)
+    )
+    probe = (
+        args.probe
+        if args.probe is not None
+        else (base.probe if base else "compile")
+    )
+    model = (
+        args.model
+        if args.model is not None
+        else (base.model_target if base else "deepseek-coder")
+    )
+    api_key = args.api_key if args.api_key is not None else (base.api_key if base else None)
+    base_url = args.base_url if args.base_url is not None else (base.base_url if base else None)
+    return ProbeGateConfig(
+        uncertainty_threshold=threshold,
+        probe=probe,  # type: ignore[arg-type]
+        model_target=model,
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     cfg = ProbeGateConfig(
         uncertainty_threshold=args.threshold,
         probe=args.probe,  # type: ignore[arg-type]
         model_target=args.model,
+        api_key=args.api_key,
+        base_url=args.base_url,
     )
     path = Path(".probegate.toml")
     if path.exists() and not args.force:
@@ -125,7 +204,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     console.print(f"[green]wrote[/] {path}")
     console.print(
         Panel(
-            "[dim]edit the api_key / base_url lines to point at your 国产模型 serving tier.[/]",
+            "[dim]edit the api_key / base_url lines (or re-run with --api-key/"
+            "--base-url) to point at your 国产模型 serving tier.[/]",
             title="next step",
             border_style="blue",
         )
@@ -229,15 +309,13 @@ def _interactive_handoff(decision: Any) -> bool:
 
 def cmd_demo(args: argparse.Namespace) -> int:
     spans = build_demo_spans()
-    gate = ProbeGate(
-        uncertainty_threshold=args.threshold,
-        probe=args.probe,
-        model_target=args.model,
-    )
+    base = _load_config()
+    cfg = _resolve_gate_config(args, base=base)
+    gate = ProbeGate(config=cfg)
     console.print(
         Panel(
             f"[bold]ProbeGate demo[/]\n"
-            f"model={args.model}  probe={args.probe}  tau={args.threshold}\n"
+            f"model={cfg.model_target}  probe={cfg.probe}  tau={cfg.uncertainty_threshold}\n"
             f"5-step coding agent — step 4 deliberately edits a broken signature.",
             border_style="magenta",
         )
@@ -271,11 +349,9 @@ def cmd_gate(args: argparse.Namespace) -> int:
     else:
         console.print("[red]error:[/] provide --fake-spans FILE or --demo")
         return 2
-    gate = ProbeGate(
-        uncertainty_threshold=args.threshold,
-        probe=args.probe,
-        model_target=args.model,
-    )
+    base = _load_config()
+    cfg = _resolve_gate_config(args, base=base)
+    gate = ProbeGate(config=cfg)
     decisions = gate.guard_many(spans)
     handoffs = _print_decisions_table(decisions, interactive=args.interactive)
     if args.interactive:
@@ -302,6 +378,13 @@ def cmd_ui(args: argparse.Namespace) -> int:
         console.print("[red]uvicorn not installed — `pip install probegate[web]`[/]")
         return 1
     from .ui import web  # noqa: F401 — importing registers routes
+
+    # v0.3.0 (fix-init-config-never-read): load .probegate.toml so the web UI's
+    # default gate (used by /api/demo) honours the configured tau / probe /
+    # model_target / api_key / base_url — the documented happy path now works.
+    base = _load_config()
+    if base is not None:
+        web.set_default_config(base)
 
     console.print(
         Panel(
@@ -342,14 +425,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--threshold", type=float, default=0.5, help="uncertainty tau (0..1)")
     p_init.add_argument("--probe", default="compile", choices=["compile", "test", "lint", "schema"])
     p_init.add_argument("--model", default="deepseek-coder")
+    p_init.add_argument("--api-key", default=None, help="国产模型 API key (m3: logprob fetch)")
+    p_init.add_argument("--base-url", default=None, help="国产模型 OpenAI-compatible base URL (m3: logprob fetch)")
     p_init.add_argument("--force", action="store_true", help="overwrite existing config")
     p_init.set_defaults(func=cmd_init)
 
     # demo
     p_demo = sub.add_parser("demo", help="run the built-in 5-step demo agent")
-    p_demo.add_argument("--model", default="deepseek-coder")
-    p_demo.add_argument("--probe", default="compile", choices=["compile", "test", "lint", "schema"])
-    p_demo.add_argument("--threshold", type=float, default=0.5)
+    p_demo.add_argument("--model", default=None)
+    p_demo.add_argument("--probe", default=None, choices=["compile", "test", "lint", "schema"])
+    p_demo.add_argument("--threshold", type=float, default=None)
+    p_demo.add_argument("--api-key", default=None, help="国产模型 API key (m3: logprob fetch)")
+    p_demo.add_argument("--base-url", default=None, help="国产模型 OpenAI-compatible base URL (m3: logprob fetch)")
     p_demo.add_argument("--interactive", action="store_true", help="prompt on every handoff span")
     p_demo.set_defaults(func=cmd_demo)
 
@@ -358,9 +445,11 @@ def _build_parser() -> argparse.ArgumentParser:
     src = p_gate.add_mutually_exclusive_group(required=True)
     src.add_argument("--fake-spans", metavar="FILE", help="jsonl of spans")
     src.add_argument("--demo", action="store_true", help="use built-in demo spans")
-    p_gate.add_argument("--probe", default="compile", choices=["compile", "test", "lint", "schema"])
-    p_gate.add_argument("--threshold", type=float, default=0.5)
-    p_gate.add_argument("--model", default="deepseek-coder")
+    p_gate.add_argument("--probe", default=None, choices=["compile", "test", "lint", "schema"])
+    p_gate.add_argument("--threshold", type=float, default=None)
+    p_gate.add_argument("--model", default=None)
+    p_gate.add_argument("--api-key", default=None, help="国产模型 API key (m3: logprob fetch)")
+    p_gate.add_argument("--base-url", default=None, help="国产模型 OpenAI-compatible base URL (m3: logprob fetch)")
     p_gate.add_argument("--interactive", action="store_true")
     p_gate.set_defaults(func=cmd_gate)
 

@@ -80,6 +80,25 @@ class SchemaProbe(Probe):
                 evidence="schema block must be a JSON object",
             )
 
+        # v0.3.0: validate the schema block's shape before iterating. A model-
+        # generated JSON-Schema array form ({"required":["x"],"types":["string"]})
+        # made types.get(key) raise AttributeError (a list has no .get); a
+        # string-form required ("endpoint") silently iterated the characters,
+        # emitting misleading evidence "missing required key e; n; ...; t" —
+        # the same false-negative-with-misleading-evidence class v0.2.0 closed
+        # for unknown types. Fail fast with an honest message instead.
+        if not isinstance(schema.get("required", []), list) or not isinstance(
+            schema.get("types", {}), dict
+        ):
+            return ProbeResult(
+                probe="schema",
+                passed=False,
+                evidence=(
+                    "schema block malformed: required must be a list and "
+                    "types must be an object"
+                ),
+            )
+
         payload_src = blocks.get("payload")
         if payload_src is None:
             # v0.2.0: the whole-span-content JSON fallback was unreachable-as-
