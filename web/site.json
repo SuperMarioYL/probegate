@@ -12,8 +12,8 @@
       "en": "Stop letting your model barrel through the step it isn't sure of"
     },
     "sub": {
-      "zh": "把模型自报的不确定度和一次机器可校验的探针配对，只有两者同时亮红灯才把这一步交给人确认——探针真会触发、不确定度取自模型真实评分，不是占位。",
-      "en": "Pair the model's self-reported uncertainty with a machine-checkable probe; route the step to a human only when both go red — the probes actually fire and the uncertainty comes from the model's real scores, not a placeholder."
+      "zh": "把模型自报的不确定度和一次机器可校验的探针配对，只有两者同时亮红灯才把这一步交给人确认——探针真会触发、不确定度取自模型真实评分，不是占位；每一步的判断还会写进本地日志，事后查得到。",
+      "en": "Pair the model's self-reported uncertainty with a machine-checkable probe; route the step to a human only when both go red — the probes actually fire and the uncertainty comes from the model's real scores, not a placeholder. Every verdict is also written to a local log you can trace later."
     },
     "command": "pip install probegate",
     "cta": { "zh": "看 30 秒 demo", "en": "Watch the 30s demo" },
@@ -32,32 +32,32 @@
     {
       "title": { "zh": "它说会查的，就真的会查", "en": "What it says it checks, it really checks" },
       "body": {
-        "zh": "一道兜底门最怕的不是漏报，是「号称会查、却静默放行」——那比不装还危险，给你假的安全感。现在每一项它承诺的检查都真触发：散落的 print 会被抓出来；schema 里说不认识的类型会直接报错，而不是装作「都验过了」；缺了该交的数据块会明明白白失败，而不是假通过。",
-        "en": "A guardrail's worst failure isn't a miss — it's claiming to check something and then silently letting it through, which is worse than no guardrail because it hands you false confidence. Now every check it promises actually fires: a stray print gets flagged; an unknown schema type is surfaced instead of a fake 'all typed'; a missing payload fails honestly instead of fake-passing."
+        "zh": "一道兜底门最怕的不是漏报，是「号称会查、却静默放行」——那比不装还危险，给你假的安全感。现在每一项它承诺的检查都真触发：散落的 print 会被抓出来；schema 里说不认识的类型会直接报错，而不是装作「都验过了」；喂进来的怪格式 schema（该是列表却给了字符串、该是对象却给了列表），不会再崩成堆栈、也不会把字符串一个字一个字当成 key 报，而是明明白白告诉你格式不对。每一道检查都配一条回归测试盯着，装作没事的那类 bug 回不来。",
+        "en": "A guardrail's worst failure isn't a miss — it's claiming to check something and then silently letting it through, which is worse than no guardrail because it hands you false confidence. Now every check it promises actually fires: a stray print gets flagged; an unknown schema type is surfaced instead of a fake 'all typed'; a malformed schema block (a list where an object was expected, a string where a list was) no longer crashes into a stack trace or mis-parses a string character-by-character as keys — it tells you plainly the shape is wrong. Every check ships with a regression test pinning it, so the 'pretend-it's-fine' class can't quietly come back."
       },
-      "chips": ["› 散落 print 会被抓", "› 未知类型不再装作验过", "› 缺数据块就明说缺"]
+      "chips": ["› 散落 print 会被抓", "› 怪格式 schema 不崩不装", "› 每道检查有测试盯着"]
     },
     {
       "title": { "zh": "不确定度是模型真实评分，不是占位", "en": "The uncertainty is the model's real score, not a placeholder" },
       "body": {
-        "zh": "一道建在假数字上的门只是表演。所以不确定度直接取自模型自己每个 token 的评分——校准最弱的国产模型 serving tier，正是这个信号最该有人兜着的地方；它从不单方定生死，只和探针做 AND 才出手。",
-        "en": "A gate built on a made-up number is theater. So the uncertainty is read straight from the model's own per-token scores — the 国产模型 serving tier, where calibration is weakest, is exactly where this signal most needs a human backing it up; it never decides on its own, only AND-ed with a probe."
+        "zh": "一道建在假数字上的门只是表演。所以不确定度直接取自模型自己每个 token 的评分——校准最弱的国产模型 serving tier，正是这个信号最该有人兜着的地方；它从不单方定生死，只和探针做 AND 才出手。你配一次的 API 密钥和阈值，每条命令、每个界面都会用上，不会写了就被丢在一边。",
+        "en": "A gate built on a made-up number is theater. So the uncertainty is read straight from the model's own per-token scores — the 国产模型 serving tier, where calibration is weakest, is exactly where this signal most needs a human backing it up; it never decides on its own, only AND-ed with a probe. The API key and threshold you configure once are honored by every command and every screen — never written and then ignored."
       },
-      "chips": ["› 不是占位数字", "› 取自模型逐 token 评分", "› 校准最弱处才需要它"]
+      "chips": ["› 不是占位数字", "› 取自模型逐 token 评分", "› 配一次，条条命令都用上"]
     },
     {
-      "title": { "zh": "测试钉着，不会偷偷退回去", "en": "Tests pin it so it can't quietly slip back" },
+      "title": { "zh": "每一步的判断，都白纸黑字记下来", "en": "Every verdict the gate makes is written down" },
       "body": {
-        "zh": "「静默放行」那一类 bug 之所以可怕，是它不报错、看着像没事。所以每一项它承诺的检查都配一条回归测试，用一个该触发的事实去断言它真触发——这一类「装作没事」的 bug 回不来，门就一直是真门。",
-        "en": "The 'silently passed' class of bug is scary because it throws no error and looks fine. So every check the probe promises ships with a regression test that asserts it fires on a case it should catch — that 'pretend-it's-fine' class can't quietly come back, and the gate stays a real gate."
+        "zh": "门拦了哪一步、为什么拦、探针查出什么、模型有多没把握——每一次判断都追加进一个本地的日志文件，你可以随时打开查看、回溯到底哪一步出了岔。不上云、不收费、不碰那个团队付费的导出，就是一个你能随时翻看的本地文件。",
+        "en": "Which step the gate stopped, why it stopped it, what the probe found, how unsure the model was — every verdict is appended to a local log file you can open anytime and trace exactly where things went sideways. No cloud, no paid export, no touching the team-tier relay — just a local file you can read whenever."
       },
-      "chips": ["› 每道检查都有测试盯着", "› 装作没事的 bug 回不来", "› 该触发的真触发"]
+      "chips": ["› 每个判断都记进本地", "› 可查可回看", "› 不上云、不收费"]
     }
   ],
   "scene": { "kind": "hub-nodes", "nodes": ["agent loop", "compile", "test", "lint", "schema", "human"] },
   "cta": {
     "headline": { "zh": "给你的国产模型 agent 装一道真兜底门", "en": "Give your 国产模型 agent a gate that actually catches" },
-    "sub": { "zh": "一条命令装上，demo 里第 4 步就会弹门。", "en": "Install in one command — the demo trips the gate at step 4." },
+    "sub": { "zh": "一条命令装上，demo 里第 4 步就会弹门，每个判断都留痕可查。", "en": "Install in one command — the demo trips the gate at step 4, and every verdict is logged for later." },
     "button": { "zh": "pip install probegate", "en": "pip install probegate" }
   },
   "footer": { "tag": { "zh": "MIT 开源 · 国产模型自治 agent 的 per-span 探针校验兜底门", "en": "MIT open source · the per-span probe-validation fallback gate for 国产模型 autonomous agents" } }
