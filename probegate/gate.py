@@ -14,6 +14,7 @@ Only the AND of both is a trustworthy abstention trigger.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 
 from .models import GateDecision, ProbeGateConfig, ProbeResult, Span
@@ -22,7 +23,7 @@ from .probes.compile_probe import CompileProbe
 from .probes.lint_probe import LintProbe
 from .probes.schema_probe import SchemaProbe
 from .probes.test_probe import TestProbe
-from .uncertainty import UncertaintyAdapter
+from .uncertainty import UncertaintyAdapter, UncertaintyConfigError
 
 # Probe registry — the gate *calls* the probe layer (Autohand Code), it does
 # not reinvent it. Adding a probe = one entry here + one Probe subclass.
@@ -79,8 +80,11 @@ class ProbeGate:
     def guard(self, span: Span) -> GateDecision:
         """Evaluate a single span through the dual-signal gate."""
         # (a) uncertainty — m1 reads span.uncertainty directly; m3 fetches
-        #     logprobs from the 国产模型 API via the adapter.
-        uncertainty = self.adapter.read(span)
+        #     logprobs from the 国产模型 API via the adapter when creds are
+        #     set (v0.4.0 fix-guard-never-fetches-logprob: --api-key/
+        #     --base-url now actually drive a fetch), falling back to the
+        #     m1 read(span) path on UncertaintyConfigError.
+        uncertainty = self._resolve_uncertainty(span)
         # normalize back into the span so downstream sees the resolved value
         span = span.model_copy(update={"uncertainty": uncertainty})
         # (b) machine-checkable probe
@@ -88,6 +92,27 @@ class ProbeGate:
         decision = self._evaluate(span, probe_result)
         self.history.append(decision)
         return decision
+
+    def _resolve_uncertainty(self, span: Span) -> float:
+        """Resolve a span's uncertainty, fetching a real logprob when creds set.
+
+        v0.4.0 (fix-guard-never-fetches-logprob): when ``config.api_key`` and
+        ``config.base_url`` are set, drive the real httpx logprob fetch
+        (:meth:`UncertaintyAdapter.fetch_logprob`) so ``--api-key`` /
+        ``--base-url`` actually trigger a fetch end-to-end (the v0.3.0
+        fix-init-config-never-read claim of "reachable end-to-end" was not
+        delivered as shipped because guard() only ever called read()). Falls
+        back to the m1 :meth:`read` identity path on
+        :class:`UncertaintyConfigError` per the existing adapter contract — a
+        creds-less caller keeps the m1 behaviour and never crashes.
+        """
+        cfg = self.config
+        if cfg.api_key and cfg.base_url:
+            try:
+                return asyncio.run(self.adapter.fetch_logprob(span))
+            except UncertaintyConfigError:
+                return self.adapter.read(span)
+        return self.adapter.read(span)
 
     def guard_many(self, spans: Iterable[Span]) -> list[GateDecision]:
         """Evaluate a stream of spans; returns one decision per span."""

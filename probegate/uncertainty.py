@@ -57,18 +57,28 @@ def parse_logprob_uncertainty(data: dict[str, Any]) -> float:
         raise UncertaintyFetchError("logprobs.content is empty — no tokens to score")
 
     surprises: list[float] = []
-    for entry in tokens:
-        logprob = entry.get("logprob")
-        if logprob is None:
-            continue
-        # clamp: some backends emit +0.0 for forced/special tokens; a logprob
-        # is a log-probability so it can never legitimately exceed 0.0.
-        if logprob > 0.0:
-            logprob = 0.0
-        prob = math.exp(logprob)
-        if prob > 1.0:
-            prob = 1.0
-        surprises.append(1.0 - prob)
+    # v0.4.0 (folded fix-parse-logprob-attributeerror): the per-token loop is
+    # inside the try so a malformed (non-dict) token entry raises
+    # UncertaintyFetchError instead of leaking a raw AttributeError. This is
+    # latent today only while fetch_logprob is unwired; it goes live the moment
+    # fix-guard-never-fetches-logprob lands, so the two ship together.
+    try:
+        for entry in tokens:
+            logprob = entry.get("logprob")
+            if logprob is None:
+                continue
+            # clamp: some backends emit +0.0 for forced/special tokens; a logprob
+            # is a log-probability so it can never legitimately exceed 0.0.
+            if logprob > 0.0:
+                logprob = 0.0
+            prob = math.exp(logprob)
+            if prob > 1.0:
+                prob = 1.0
+            surprises.append(1.0 - prob)
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise UncertaintyFetchError(
+            f"malformed logprob token entry (expected dict with 'logprob'): {exc}"
+        ) from exc
     if not surprises:
         raise UncertaintyFetchError("no token logprobs found in response")
 

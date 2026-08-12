@@ -150,6 +150,10 @@ The commercial path targets Chinese SME teams wiring agents into production (sup
 - [ ] **m3 — wire 国产模型 logprob**: UncertaintyAdapter against DeepSeek-Coder / Qwen3-Coder / GLM API + add test/lint/schema probes + 10-min comparison demo recording
 - [ ] v0.2 — ProbeGate Team: audit-log export, SSO, hosted gate relay
 
+<h2><img src="https://api.iconify.design/tabler:clipboard-list.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Changelog</h2>
+
+- **v0.4.0** (hardening): fix `guard()` never fetching a logprob — `--api-key`/`--base-url` now actually drive `UncertaintyAdapter.fetch_logprob`, so the dual-signal gate's uncertainty half is no longer the un-trusted self-report the product thesis rejects (`fix-guard-never-fetches-logprob`). Folded: `parse_logprob_uncertainty` raises `UncertaintyFetchError` on non-dict token entries instead of leaking `AttributeError`; `/api/guard` no longer drops the loaded creds when rebuilding the gate config.
+
 <h2><img src="https://api.iconify.design/tabler:license.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> License + Contributing</h2>
 
 MIT, see [LICENSE](./LICENSE). File issues / PRs at [github.com/SuperMarioYL/probegate/issues](https://github.com/SuperMarioYL/probegate/issues).

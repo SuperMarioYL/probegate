@@ -33,7 +33,7 @@ from ..models import ModelTarget, ProbeGateConfig, ProbeKind, Span
 
 app = FastAPI(
     title="ProbeGate",
-    version="0.3.0",
+    version="0.4.0",
     description="Per-span probe-validation gate for 国产模型 autonomous agents.",
 )
 
@@ -112,12 +112,22 @@ def guard(req: GuardRequest) -> dict[str, object]:
     v0.3.0: a bad ``probe`` name or out-of-range ``uncertainty_threshold`` is
     rejected by FastAPI pre-route (422) because ``GuardRequest`` mirrors
     ``ProbeGateConfig`` constraints — it never reaches the gate constructor.
+
+    v0.4.0 (fix-guard-never-fetches-logprob): carry the loaded creds
+    (``_default_config``'s ``api_key``/``base_url`` from ``.probegate.toml``)
+    into the rebuilt gate config so ``--api-key``/``--base-url`` actually
+    drive a fetch end-to-end. Before this the rebuild dropped the creds, so
+    ``/api/guard`` never fetched a logprob even when the operator had
+    configured them via ``probegate init``.
     """
+    base = _default_config
     gate = ProbeGate(
         config=ProbeGateConfig(
             uncertainty_threshold=req.uncertainty_threshold,
             probe=req.probe,
             model_target=req.model_target,
+            api_key=base.api_key if base else None,
+            base_url=base.base_url if base else None,
         )
     )
     decisions = [gate.guard(s) for s in req.spans]

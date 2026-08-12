@@ -137,6 +137,10 @@ jsonl span 格式（每行一个）：
 - [ ] **m3 — 接国产模型 logprob**：UncertaintyAdapter 接 DeepSeek-Coder / Qwen3-Coder / GLM API + 补 test/lint/schema 探针 + 10 分钟对比 demo 录屏
 - [ ] v0.2 — ProbeGate Team：审计日志导出、SSO、hosted 门中继
 
+<h2><img src="https://api.iconify.design/tabler:clipboard-list.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 更新日志</h2>
+
+- **v0.4.0**（加固）：修复 `guard()` 从不拉取 logprob 的缺陷——`--api-key`/`--base-url` 现在真正驱动 `UncertaintyAdapter.fetch_logprob`，双信号门的不确定度半边不再是不可信的自报值（`fix-guard-never-fetches-logprob`）。附带：`parse_logprob_uncertainty` 对非 dict token 条目改抛 `UncertaintyFetchError`（不再泄漏 `AttributeError`）；`/api/guard` 重建 config 时不再丢弃已加载的 creds。
+
 <h2><img src="https://api.iconify.design/tabler:license.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> License + Contributing</h2>
 
 MIT，见 [LICENSE](./LICENSE)。提 issue / PR：[github.com/SuperMarioYL/probegate/issues](https://github.com/SuperMarioYL/probegate/issues)。

@@ -9,7 +9,7 @@ from .gate import ProbeGate
 from .uncertainty import UncertaintyAdapter
 from .audit import LocalAuditLog
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Span",
