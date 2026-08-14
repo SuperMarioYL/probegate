@@ -24,6 +24,8 @@ code (verified by reasoning over the pre-fix ``guard()`` body that called
 """
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -233,3 +235,159 @@ class TestParseLogprobNonDictTokenContract:
         data = {"choices": [{"logprobs": {"content": ["def", " add"]}}]}
         with pytest.raises(UncertaintyFetchError):
             parse_logprob_uncertainty(data)
+
+
+# ==========================================================================
+# (4) v0.5.0 fix-guard-fetch-robustness — the fetch path survives async
+#     agent loops and transient API failures instead of crashing the gate.
+#     Two HIGH bug-hunt findings share probegate/gate.py _resolve_uncertainty
+#     and ship together: fix-guard-fetch-crashes-async-loop (asyncio.run
+#     raises RuntimeError inside a running event loop) and
+#     fix-guard-fetch-errors-crash-loop (only UncertaintyConfigError was
+#     caught, so a transient httpx error/malformed logprob tore down the
+#     whole agent loop). Each test below FAILS on pre-v0.5.0 code (it would
+#     raise) and PASSES on the hardened code (it degrades to read(span)).
+# ==========================================================================
+
+
+def _mock_handler_500() -> httpx.MockTransport:
+    """A MockTransport that returns a 5xx -> raise_for_status raises HTTPStatusError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(500, json={"error": "boom"})
+
+    return httpx.MockTransport(handler)
+
+
+def _mock_handler_timeout() -> httpx.MockTransport:
+    """A MockTransport that simulates a transient connect timeout."""
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        raise httpx.ConnectTimeout("simulated 国产模型 serving-tier timeout")
+
+    return httpx.MockTransport(handler)
+
+
+def _mock_handler_malformed() -> httpx.MockTransport:
+    """A MockTransport returning a 200 whose logprobs are non-dict tokens."""
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(
+            200, json={"choices": [{"logprobs": {"content": ["def", " add"]}}]}
+        )
+
+    return httpx.MockTransport(handler)
+
+
+class TestGuardFetchRobustnessContract:
+    def test_guard_async_fetches_logprob_and_uses_fetched_value(self) -> None:
+        # guard_async awaits fetch_logprob directly (no asyncio.run) so the
+        # v0.4.0 fetch works from inside a running event loop (the primary
+        # async-agent-loop use case). Pre-v0.5.0 there was no guard_async, and
+        # the sync guard()'s asyncio.run would have raised RuntimeError here.
+        fetched: list[int] = []
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler(fetched))
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s1",
+            agent_step=1,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = asyncio.run(gate.guard_async(span))
+
+        assert len(fetched) == 1  # the fetch actually ran end-to-end
+        expected = parse_logprob_uncertainty(RECORDED_LOGPROB_RESPONSE)
+        assert decision.uncertainty == pytest.approx(expected)
+        assert decision.uncertainty != HARDCODED_UNCERTAINTY
+
+    def test_guard_degrades_to_read_inside_running_event_loop(self) -> None:
+        # The primary documented use case is "agent loop 外面包一层
+        # ProbeGate(...)"; modern agent loops are async. Pre-v0.5.0, calling
+        # the sync guard() from inside a running event loop made asyncio.run
+        # raise RuntimeError and crash the agent loop. Fixed: guard() catches
+        # the RuntimeError and degrades to the non-fatal read(span) path.
+        fetched: list[int] = []
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler(fetched))
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s2",
+            agent_step=2,
+            content="x = 1\n",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        async def _call_guard_inside_loop():
+            # We are inside a running event loop here, so guard()'s internal
+            # asyncio.run(...) must raise RuntimeError; the fix catches it and
+            # degrades to read(span) instead of crashing.
+            return gate.guard(span)
+
+        decision = asyncio.run(_call_guard_inside_loop())
+
+        # the fetch was NOT completed (asyncio.run failed before it) -> degrade
+        assert fetched == []
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_async_degrades_to_read_on_transient_5xx(self) -> None:
+        # A 5xx from the 国产模型 logprob endpoint -> fetch_logprob's
+        # raise_for_status raises httpx.HTTPStatusError. Pre-v0.5.0 only
+        # UncertaintyConfigError was caught -> the 5xx propagated and tore
+        # down the agent loop. Fixed: degrade to read(span), return a decision.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_500())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s3",
+            agent_step=3,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = asyncio.run(gate.guard_async(span))
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_degrades_to_read_on_transient_timeout(self) -> None:
+        # A transient connect timeout -> httpx.ConnectTimeout (a TransportError
+        # / HTTPError). Pre-v0.5.0 uncaught -> agent loop crash. Fixed: degrade.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_timeout())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s4",
+            agent_step=4,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_degrades_to_read_on_malformed_logprob(self) -> None:
+        # A malformed logprob response -> parse_logprob_uncertainty raises
+        # UncertaintyFetchError. Pre-v0.5.0 uncaught -> agent loop crash the
+        # moment creds were set (the v0.4.0 feature). Fixed: degrade to
+        # read(span); also confirms the v0.4.0 folded parser-widening is live.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_malformed())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s5",
+            agent_step=5,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+

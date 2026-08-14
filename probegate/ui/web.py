@@ -33,7 +33,7 @@ from ..models import ModelTarget, ProbeGateConfig, ProbeKind, Span
 
 app = FastAPI(
     title="ProbeGate",
-    version="0.4.0",
+    version="0.5.0",
     description="Per-span probe-validation gate for 国产模型 autonomous agents.",
 )
 
