@@ -40,10 +40,10 @@
     {
       "title": { "zh": "不确定度是真去查出来的，不是模型自报", "en": "The uncertainty is fetched, not the model's self-report" },
       "body": {
-        "zh": "一道建在假数字上的门只是表演。所以不确定度不是模型嘴上说的那个数——你把 API 密钥和地址配一次，每一步都真去调一次模型，把每个 token 的评分读回来再算。这恰好是校准最弱的国产模型 serving 层最该有人兜着的地方；它从不单方定生死，只和探针做 AND 才出手。模型回的怪格式（不是预期的结构、字段缺了），不会再崩成一堆看不懂的堆栈、也不会装作没事，而是报一个名字清楚的错，你能看见、能接住；你在配置里填的密钥，每条命令、每个界面都会用上，不会被悄悄丢掉。",
-        "en": "A gate built on a made-up number is theater. So the uncertainty isn't the number the model just says — set the API key and endpoint once, and every step actually calls the model and reads back its per-token scores to compute the number. That's exactly the 国产模型 serving tier, where calibration is weakest and the signal most needs a human backing it; it never decides on its own, only AND-ed with a probe. A malformed response from the model (wrong shape, missing field) no longer crashes into an unreadable stack trace or fake-passes — it raises a plainly named error you can see and catch; the key you put in config is honored by every command and every screen, never silently dropped."
+        "zh": "一道建在假数字上的门只是表演。所以不确定度不是模型嘴上说的那个数——你把 API 密钥和地址配一次，每一步都真去调一次模型，把每个 token 的评分读回来再算。这恰好是校准最弱的国产模型 serving 层最该有人兜着的地方；它从不单方定生死，只和探针做 AND 才出手。模型回的怪格式（不是预期的结构、字段缺了），不会再崩成一堆看不懂的堆栈、也不会装作没事，而是报一个名字清楚的错，你能看见、能接住；你在配置里填的密钥，每条命令、每个界面都会用上，不会被悄悄丢掉。就算模型那一下抽风（超时、报错、回了乱码）或你的 agent 本来就是异步跑的，门也不会跟着把整条跑死——它退回那条不单方定生死的老路继续走，而不是一崩到底。",
+        "en": "A gate built on a made-up number is theater. So the uncertainty isn't the number the model just says — set the API key and endpoint once, and every step actually calls the model and reads back its per-token scores to compute the number. That's exactly the 国产模型 serving tier, where calibration is weakest and the signal most needs a human backing it; it never decides on its own, only AND-ed with a probe. A malformed response from the model (wrong shape, missing field) no longer crashes into an unreadable stack trace or fake-passes — it raises a plainly named error you can see and catch; the key you put in config is honored by every command and every screen, never silently dropped. And if the model hiccups that instant — a timeout, an error, a garbled response — or your agent runs async, the gate doesn't take the whole run down with it: it falls back to the path that never decides alone and keeps going, instead of crashing the loop."
       },
-      "chips": ["› 真去调模型读评分", "› 逐 token 算出不确定度", "› 配一次密钥，处处生效"]
+      "chips": ["› 真去调模型读评分", "› 逐 token 算出不确定度", "› 配一次密钥，处处生效", "› 模型抽风不连累整条跑"]
     },
     {
       "title": { "zh": "每一步的判断，都白纸黑字记下来", "en": "Every verdict the gate makes is written down" },
