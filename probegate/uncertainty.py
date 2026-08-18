@@ -139,23 +139,43 @@ class UncertaintyAdapter:
                 "(国产模型 OpenAI-compatible endpoint); the m1 read(span) path "
                 "uses span.uncertainty directly."
             )
-        url = f"{cfg.base_url.rstrip('/')}/chat/completions"
-        payload = {
-            "model": cfg.model_target,
-            "messages": [{"role": "user", "content": span.content}],
-            "logprobs": True,
-            "top_logprobs": 1,
-            "max_tokens": 16,
-        }
-        headers = {
-            "Authorization": f"Bearer {cfg.api_key}",
-            "Content-Type": "application/json",
-        }
-        client_kwargs: dict[str, Any] = {"timeout": 30.0}
-        if self._transport is not None:
-            client_kwargs["transport"] = self._transport
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        # v0.6.0 (fix-guard-fetch-non-json-crash): wrap the URL build, the
+        # POST, and resp.json() so a json.JSONDecodeError (a 200 with a
+        # non-JSON body — an HTML error page / empty / truncated stream, a
+        # classic serving-tier hiccup) or a malformed-URL ValueError (a
+        # scheme-less `api.deepseek.com/v1` typo in .probegate.toml) is
+        # converted to UncertaintyFetchError. Both are ValueErrors that are
+        # NONE of the types caught by _resolve_uncertainty /
+        # _resolve_uncertainty_async in gate.py, so without this wrap they
+        # would propagate through guard()/guard_async() and tear down the
+        # agent loop — the exact cascade the v0.5.0 robustness fix was meant
+        # to prevent. UncertaintyFetchError IS caught by those degrade paths.
+        # parse_logprob_uncertainty raises UncertaintyFetchError (a
+        # RuntimeError, not a ValueError) so it is intentionally left outside
+        # this wrap.
+        try:
+            url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+            payload = {
+                "model": cfg.model_target,
+                "messages": [{"role": "user", "content": span.content}],
+                "logprobs": True,
+                "top_logprobs": 1,
+                "max_tokens": 16,
+            }
+            headers = {
+                "Authorization": f"Bearer {cfg.api_key}",
+                "Content-Type": "application/json",
+            }
+            client_kwargs: dict[str, Any] = {"timeout": 30.0}
+            if self._transport is not None:
+                client_kwargs["transport"] = self._transport
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except ValueError as exc:
+            raise UncertaintyFetchError(
+                "fetch_logprob could not read a JSON logprob response "
+                f"(non-JSON 200 body or malformed base_url): {exc}"
+            ) from exc
         return parse_logprob_uncertainty(data)

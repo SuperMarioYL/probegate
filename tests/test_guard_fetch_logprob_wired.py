@@ -391,3 +391,219 @@ class TestGuardFetchRobustnessContract:
         assert decision.uncertainty == HARDCODED_UNCERTAINTY
         assert decision.rule in {"proceed", "abstain", "handoff"}
 
+
+# ==========================================================================
+# (5) v0.6.0 fix-guard-fetch-non-json-crash — a 200 with a non-JSON body
+#     (an HTML error page / empty / truncated stream — a classic serving-tier
+#     hiccup) raises json.JSONDecodeError, and a malformed base_url (a
+#     scheme-less `api.deepseek.com/v1` typo) raises a plain ValueError. Both
+#     are ValueErrors that are NONE of the types caught by
+#     _resolve_uncertainty / _resolve_uncertainty_async, so pre-v0.6.0 they
+#     propagated through guard()/guard_async() and tore down the agent loop
+#     — the exact cascade the v0.5.0 robustness fix was meant to prevent.
+#     Fixed: fetch_logprob wraps the URL build + POST + resp.json() so a
+#     ValueError raises UncertaintyFetchError, already caught by the degrade
+#     path. Each test below FAILS on pre-v0.6.0 code (it raises
+#     JSONDecodeError / ValueError) and PASSES on the fixed code (it degrades
+#     to read(span) and returns a decision).
+# ==========================================================================
+
+
+def _mock_handler_non_json() -> httpx.MockTransport:
+    """A MockTransport returning a 200 with a non-JSON (HTML) body."""
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(
+            200,
+            content=b"<html>upstream gate timeout</html>",
+            headers={"content-type": "text/html"},
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def _malformed_url_cfg() -> ProbeGateConfig:
+    """A creds config whose base_url is a scheme-less typo (ValueError at fetch)."""
+    return ProbeGateConfig(
+        uncertainty_threshold=0.5,
+        probe="compile",
+        model_target="deepseek-coder",
+        api_key="test-key",
+        base_url="api.deepseek.com/v1",  # scheme-less -> ValueError at client.post
+    )
+
+
+def _mock_handler_unchecked() -> httpx.MockTransport:
+    """A MockTransport returning a valid 200 JSON body WITHOUT asserting the
+    request path.
+
+    Used for the malformed-base_url cases: httpx routes a scheme-less URL to
+    the transport as a relative path (path != /v1/chat/completions), so the
+    path-asserting :func:`_mock_handler` would fail before the real defect
+    (a ValueError httpx raises while building the response URL) surfaces.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(200, json=RECORDED_LOGPROB_RESPONSE)
+
+    return httpx.MockTransport(handler)
+
+
+class TestGuardFetchNonJsonCrashContract:
+    def test_guard_degrades_on_non_json_200_body(self) -> None:
+        # A 200 + HTML body -> resp.json() raises json.JSONDecodeError (a
+        # ValueError). Pre-v0.6.0 uncaught -> guard() raised and tore down
+        # the agent loop. Fixed: degrade to read(span), return a decision.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_non_json())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s6",
+            agent_step=6,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_async_degrades_on_non_json_200_body(self) -> None:
+        # Same defect via the async path: guard_async() must degrade, not
+        # raise json.JSONDecodeError. Pre-v0.6.0 crashed identically.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_non_json())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s7",
+            agent_step=7,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = asyncio.run(gate.guard_async(span))
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_degrades_on_malformed_base_url(self) -> None:
+        # A scheme-less base_url typo -> httpx raises a plain ValueError
+        # while building/sending the request (a serving-tier-agnostic config
+        # mistake that goes live the moment creds are set). Pre-v0.6.0
+        # uncaught -> guard() raised. Fixed: fetch_logprob's wrap converts the
+        # ValueError to UncertaintyFetchError -> degrade to read(span). The
+        # handler is intentionally path-unchecked (see _mock_handler_unchecked)
+        # because httpx routes the scheme-less URL as a relative path.
+        cfg = _malformed_url_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_unchecked())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s8",
+            agent_step=8,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+    def test_guard_async_degrades_on_malformed_base_url(self) -> None:
+        cfg = _malformed_url_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_unchecked())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s9",
+            agent_step=9,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = asyncio.run(gate.guard_async(span))
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert decision.rule in {"proceed", "abstain", "handoff"}
+
+
+# ==========================================================================
+# (6) v0.6.0 qual-fetch-degrade-observability — when the fetch degrades
+#     (running loop / transient httpx error / malformed or non-JSON logprob),
+#     _resolve_uncertainty falls back to read(span) and _evaluate now surfaces
+#     a ``[fetch degraded: <reason>; using un-trusted self-report]`` marker in
+#     the GateDecision rationale. The product thesis is to NOT trust
+#     self-reported uncertainty, so a `proceed` built on a degraded fetch is a
+#     potential false all-clear the operator must be able to see. Pre-v0.6.0
+#     the rationale was the normal one with no degrade marker.
+# ==========================================================================
+
+
+class TestGuardFetchDegradeObservabilityContract:
+    def test_degraded_decision_rationale_names_degrade_reason(self) -> None:
+        # A 5xx from the 国产模型 logprob endpoint -> fetch degrades to
+        # read(span). The decision's rationale must surface the degrade
+        # marker AND name the reason (the httpx error class) so an operator
+        # sees the uncertainty was the un-trusted self-report.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_500())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s10",
+            agent_step=10,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = asyncio.run(gate.guard_async(span))
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        # the marker is present
+        assert "[fetch degraded:" in decision.rationale
+        assert "un-trusted self-report" in decision.rationale
+        # the reason names the httpx error class (HTTPStatusError from the 5xx)
+        assert "HTTPStatusError" in decision.rationale
+
+    def test_non_json_degraded_decision_rationale_names_degrade_reason(self) -> None:
+        # The v0.6.0 fix's degrade (non-JSON 200 -> UncertaintyFetchError)
+        # must also surface the marker — pairs the fix milestone with the
+        # observability milestone on the same degrade trigger.
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler_non_json())
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s11",
+            agent_step=11,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert decision.uncertainty == HARDCODED_UNCERTAINTY
+        assert "[fetch degraded:" in decision.rationale
+        assert "un-trusted self-report" in decision.rationale
+        assert "UncertaintyFetchError" in decision.rationale
+
+    def test_successful_fetch_rationale_has_no_degrade_marker(self) -> None:
+        # Negative assertion: when the fetch SUCCEEDS, the rationale must NOT
+        # carry the degrade marker (the uncertainty is a fetched logprob, not
+        # the un-trusted self-report). Distinguishes the quality change from a
+        # blanket "always prepend marker" regression.
+        fetched: list[int] = []
+        cfg = _creds_cfg()
+        adapter = UncertaintyAdapter(cfg, transport=_mock_handler(fetched))
+        gate = ProbeGate(config=cfg, uncertainty_adapter=adapter)
+        span = Span(
+            id="s12",
+            agent_step=12,
+            content="def add(a, b):",
+            uncertainty=HARDCODED_UNCERTAINTY,
+        )
+
+        decision = gate.guard(span)
+
+        assert len(fetched) == 1  # the fetch ran
+        assert decision.uncertainty != HARDCODED_UNCERTAINTY  # fetched value
+        assert "[fetch degraded:" not in decision.rationale
+

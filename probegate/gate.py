@@ -88,18 +88,25 @@ class ProbeGate:
         gate (and the agent loop it wraps). For an async caller, prefer
         :meth:`guard_async`, which awaits the fetch directly without
         ``asyncio.run``.
+
+        v0.6.0 (fix-guard-fetch-non-json-crash + qual-fetch-degrade-observability):
+        a 200 with a non-JSON body or a malformed base_url now degrades
+        instead of crashing, and every degrade surfaces a
+        ``[fetch degraded: <reason>; using un-trusted self-report]`` marker in
+        the ``GateDecision`` rationale so an operator sees when a decision
+        rests on the un-trusted self-report rather than a fetched logprob.
         """
         # (a) uncertainty — m1 reads span.uncertainty directly; m3 fetches
         #     logprobs from the 国产模型 API via the adapter when creds are
         #     set (v0.4.0 fix-guard-never-fetches-logprob: --api-key/
         #     --base-url now actually drive a fetch), falling back to the
         #     m1 read(span) path on UncertaintyConfigError.
-        uncertainty = self._resolve_uncertainty(span)
+        uncertainty, degrade_reason = self._resolve_uncertainty(span)
         # normalize back into the span so downstream sees the resolved value
         span = span.model_copy(update={"uncertainty": uncertainty})
         # (b) machine-checkable probe
         probe_result = self.probe.run(span)
-        decision = self._evaluate(span, probe_result)
+        decision = self._evaluate(span, probe_result, degrade_reason)
         self.history.append(decision)
         return decision
 
@@ -115,15 +122,20 @@ class ProbeGate:
         (no ``asyncio.run``) so the v0.4.0 headline feature works for async
         callers. On a transient fetch error it degrades to the non-fatal
         ``read(span)`` path, same as :meth:`guard`.
+
+        v0.6.0 (qual-fetch-degrade-observability): the degrade reason is
+        surfaced in the ``GateDecision`` rationale via the same
+        ``[fetch degraded: <reason>; using un-trusted self-report]`` marker as
+        :meth:`guard`.
         """
-        uncertainty = await self._resolve_uncertainty_async(span)
+        uncertainty, degrade_reason = await self._resolve_uncertainty_async(span)
         span = span.model_copy(update={"uncertainty": uncertainty})
         probe_result = self.probe.run(span)
-        decision = self._evaluate(span, probe_result)
+        decision = self._evaluate(span, probe_result, degrade_reason)
         self.history.append(decision)
         return decision
 
-    def _resolve_uncertainty(self, span: Span) -> float:
+    def _resolve_uncertainty(self, span: Span) -> tuple[float, str | None]:
         """Resolve a span's uncertainty, fetching a real logprob when creds set.
 
         v0.4.0 (fix-guard-never-fetches-logprob): when ``config.api_key`` and
@@ -142,14 +154,28 @@ class ProbeGate:
         (1) fix-guard-fetch-crashes-async-loop — ``asyncio.run()`` raises
         ``RuntimeError`` ("cannot be called from a running event loop") when
         :meth:`guard` is called from within a running asyncio loop (an async
-        agent loop). Caught → degrade to ``read(span)``; async callers should
+        agent loop). Caught -> degrade to ``read(span)``; async callers should
         use :meth:`guard_async`.
         (2) fix-guard-fetch-errors-crash-loop — a transient
         :class:`httpx.HTTPError` (timeout / connect / 5xx) or
         :class:`UncertaintyFetchError` (malformed logprobs) propagating up
-        would crash the whole agent loop on a single API hiccup. Caught →
+        would crash the whole agent loop on a single API hiccup. Caught ->
         degrade to ``read(span)`` so the safety-net gate does not become the
         cascade it exists to prevent.
+
+        v0.6.0 (qual-fetch-degrade-observability): return the degrade reason
+        alongside the uncertainty so :meth:`_evaluate` can surface a
+        ``[fetch degraded: <reason>; using un-trusted self-report]`` marker in
+        the ``GateDecision`` rationale. The marker covers every degrade
+        trigger (running loop, transient httpx error, malformed / non-JSON
+        logprob via fix-guard-fetch-non-json-crash, which
+        :meth:`UncertaintyAdapter.fetch_logprob` now raises as
+        :class:`UncertaintyFetchError`). The creds-less m1 ``read(span)``
+        path is NOT a degrade (no fetch was attempted) and returns ``None``.
+
+        Returns a ``(uncertainty, degrade_reason)`` tuple where
+        ``degrade_reason`` is ``None`` when the fetch succeeded or no fetch
+        was attempted, and a short reason string when the fetch degraded.
         """
         cfg = self.config
         if cfg.api_key and cfg.base_url:
@@ -164,40 +190,51 @@ class ProbeGate:
             except RuntimeError:
                 pass  # no running loop -> the sync asyncio.run path is safe
             else:
-                return self.adapter.read(span)
+                return (
+                    self.adapter.read(span),
+                    "sync guard called inside a running event loop",
+                )
             try:
-                return asyncio.run(self.adapter.fetch_logprob(span))
-            except httpx.HTTPError:
+                return asyncio.run(self.adapter.fetch_logprob(span)), None
+            except httpx.HTTPError as exc:
                 # Transient serving-tier blip (timeout / connect / 5xx from
                 # raise_for_status) -> degrade to the un-trusted-but-non-fatal
                 # read(span) so a single API hiccup does not tear down the
                 # agent loop (fix-guard-fetch-errors-crash-loop).
-                return self.adapter.read(span)
-            except (UncertaintyConfigError, UncertaintyFetchError, RuntimeError):
+                return self.adapter.read(span), type(exc).__name__
+            except (UncertaintyConfigError, UncertaintyFetchError, RuntimeError) as exc:
                 # UncertaintyConfigError: creds missing at fetch time -> m1 path.
-                # UncertaintyFetchError: malformed logprob response -> degrade.
+                # UncertaintyFetchError: malformed / non-JSON logprob response
+                #   (incl. the v0.6.0 fix-guard-fetch-non-json-crash wrap) ->
+                #   degrade.
                 # RuntimeError: defensive backstop if asyncio.run still raises
                 # for any other reason -> degrade, not crash.
-                return self.adapter.read(span)
-        return self.adapter.read(span)
+                return self.adapter.read(span), type(exc).__name__
+        # creds-less m1 path: no fetch attempted -> NOT a degrade.
+        return self.adapter.read(span), None
 
-    async def _resolve_uncertainty_async(self, span: Span) -> float:
+    async def _resolve_uncertainty_async(self, span: Span) -> tuple[float, str | None]:
         """Async variant of :meth:`_resolve_uncertainty`.
 
         Awaits :meth:`UncertaintyAdapter.fetch_logprob` directly (no
         ``asyncio.run``), so it is safe inside a running event loop. Degrades
         to the m1 :meth:`read` path on the same exception classes as the sync
         variant.
+
+        v0.6.0 (qual-fetch-degrade-observability): returns the degrade reason
+        (same semantics as :meth:`_resolve_uncertainty`) so :meth:`_evaluate`
+        can surface the ``[fetch degraded: ...]`` marker for async callers too.
         """
         cfg = self.config
         if cfg.api_key and cfg.base_url:
             try:
-                return await self.adapter.fetch_logprob(span)
-            except httpx.HTTPError:
-                return self.adapter.read(span)
-            except (UncertaintyConfigError, UncertaintyFetchError, RuntimeError):
-                return self.adapter.read(span)
-        return self.adapter.read(span)
+                return await self.adapter.fetch_logprob(span), None
+            except httpx.HTTPError as exc:
+                return self.adapter.read(span), type(exc).__name__
+            except (UncertaintyConfigError, UncertaintyFetchError, RuntimeError) as exc:
+                return self.adapter.read(span), type(exc).__name__
+        # creds-less m1 path: no fetch attempted -> NOT a degrade.
+        return self.adapter.read(span), None
 
     def guard_many(self, spans: Iterable[Span]) -> list[GateDecision]:
         """Evaluate a stream of spans; returns one decision per span."""
@@ -205,7 +242,12 @@ class ProbeGate:
 
     # -- the AND gate -----------------------------------------------------
 
-    def _evaluate(self, span: Span, probe_result: ProbeResult) -> GateDecision:
+    def _evaluate(
+        self,
+        span: Span,
+        probe_result: ProbeResult,
+        degrade_reason: str | None = None,
+    ) -> GateDecision:
         tau = self.config.uncertainty_threshold
         high_uncertainty = span.uncertainty > tau
         probe_failed = not probe_result.passed
@@ -231,6 +273,20 @@ class ProbeGate:
             rationale = (
                 f"uncertainty {span.uncertainty:.2f} <= tau {tau:.2f} AND "
                 f"probe '{probe_result.probe}' passed"
+            )
+
+        # v0.6.0 (qual-fetch-degrade-observability): when the uncertainty
+        # resolved to the un-trusted self-report because the fetch degraded
+        # (running loop / transient httpx error / malformed or non-JSON
+        # logprob via fix-guard-fetch-non-json-crash), surface a short marker
+        # in the rationale so an operator sees a decision resting on the
+        # self-report rather than a fetched logprob. The product thesis is to
+        # NOT trust self-reported uncertainty, so a hidden degraded fetch is a
+        # potential false all-clear the operator cannot otherwise see.
+        if degrade_reason is not None:
+            rationale = (
+                f"[fetch degraded: {degrade_reason}; "
+                "using un-trusted self-report] " + rationale
             )
 
         return GateDecision(
