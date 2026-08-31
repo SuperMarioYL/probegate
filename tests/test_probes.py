@@ -584,3 +584,34 @@ class TestLocalAuditLogContract:
         # the DEFAULT_AUDIT_PATH is the OSS-local location, NOT a Team export
         from probegate.audit import DEFAULT_AUDIT_PATH
         assert str(DEFAULT_AUDIT_PATH) == ".probegate/audit.jsonl"
+
+    def test_read_degrades_on_corrupt_last_line(self, tmp_path: object) -> None:
+        # v0.7.0 fix-audit-log-read-corrupt-line-crash: the audit log is
+        # append-only, so a process killed mid-write (or an OS-level partial
+        # write of a large record, or a hand-edited file) leaves a
+        # truncated/corrupt last line. Pre-v0.7.0 read() did a bare
+        # json.loads(line) and raised json.JSONDecodeError, hiding the
+        # salvageable records. Fixed: the corrupt line is skipped and the
+        # salvageable records are returned (degrade, not crash — the same
+        # posture the v0.5.0/v0.6.0 fetch fixes established for the gate).
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        gate = ProbeGate(probe="compile", uncertainty_threshold=0.5)
+        # one valid record
+        log.append_decision(gate.guard(Span(id="s1", agent_step=1, content="x = 1\n", uncertainty=0.1)))
+        # simulate a process killed mid-write leaving a truncated last line
+        # (partial JSON, no trailing newline — the exact byte state a SIGKILL
+        # mid-write leaves)
+        with open(f"{tmp_path}/audit.jsonl", "a", encoding="utf-8") as fh:
+            fh.write('{"type": "decision", "span_id": "s2", "rule": "proce')
+        # read() must NOT raise; it returns the one salvageable valid record
+        records = log.read()
+        assert len(records) == 1
+        assert records[0]["type"] == "decision"
+        assert records[0]["span_id"] == "s1"
+
+    def test_read_fully_corrupt_file_returns_empty(self, tmp_path: object) -> None:
+        # a file with only corrupt lines degrades to [] rather than raising.
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        with open(f"{tmp_path}/audit.jsonl", "w", encoding="utf-8") as fh:
+            fh.write("not json at all\n{also broken\n")
+        assert log.read() == []

@@ -56,15 +56,34 @@ class LocalAuditLog:
         self._write(record)
 
     def read(self) -> list[dict[str, Any]]:
-        """Read every record back (test helper; not on any hot path)."""
+        """Read every record back (test helper; not on any hot path).
+
+        v0.7.0 (fix-audit-log-read-corrupt-line-crash): the audit log is
+        append-only, so a process killed mid-write (or an OS-level partial
+        write of a large record, or a hand-edited file) can leave a
+        truncated/corrupt last line. A bare ``json.loads`` on such a line
+        raised ``json.JSONDecodeError`` and tore down the read, hiding the
+        salvageable records exactly when the audit trail is most needed
+        (debugging a cascade the gate flagged). A corrupt line is now skipped
+        so ``read()`` degrades to the salvageable records instead of raising
+        — the same degrade-not-crash posture the v0.5.0/v0.6.0 fetch fixes
+        established for the gate itself.
+        """
         if not self.path.is_file():
             return []
         out: list[dict[str, Any]] = []
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # a truncated/corrupt line (e.g. a process killed mid-write
+                    # left a partial last line) is skipped so the salvageable
+                    # records are still returned rather than crashing the read.
+                    continue
         return out
 
     def _write(self, record: dict[str, Any]) -> None:
