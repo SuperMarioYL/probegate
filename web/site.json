@@ -1,64 +1,236 @@
 {
-  "schema": 1,
-  "name": "probegate",
+  "schema": 3,
+  "name": "ProbeGate",
   "github": "https://github.com/SuperMarioYL/probegate",
   "host": "probegate.lei6393.com",
-  "lang": { "primary": "zh", "toggle": true },
-  "accent": ["#0071E3", "#0a84ff", "#0060c0"],
+  "palette": "auto",
+  "lang": {
+    "primary": "zh",
+    "toggle": true
+  },
+  "meta": {
+    "visual_profile": "neon-particle",
+    "content_version": "0.5.0",
+    "demo_source": "docs/demo-results.json"
+  },
   "hero": {
-    "eyebrow": { "zh": "国产模型 · per-span 兜底门", "en": "国产模型 · per-span fallback gate" },
+    "eyebrow": {
+      "zh": "为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。",
+      "en": "Produce proceed, abstain or handoff for each span, retaining probe evidence and the decision rationale."
+    },
     "headline": {
-      "zh": "没把握的一步，别再让模型硬编下去",
-      "en": "Stop letting your model barrel through the step it isn't sure of"
+      "zh": "把不确定度与探针结果放在一起判断。",
+      "en": "Judge uncertainty alongside probe results."
     },
     "sub": {
-      "zh": "把模型每个 token 的真实评分和一次机器可校验的探针配对，只有两者同时亮红灯才把这一步交给人确认——探针真会触发、不确定度是你配上密钥后真去调模型读回来的，不是占位；每一步的判断还会写进本地日志，事后查得到。",
-      "en": "Pair the model's real per-token scores with a machine-checkable probe; route the step to a human only when both go red — the probes actually fire and, once you set your key, the uncertainty is fetched live from the model, not a placeholder. Every verdict is also written to a local log you can trace later."
+      "zh": "为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。",
+      "en": "Produce proceed, abstain or handoff for each span, retaining probe evidence and the decision rationale."
     },
-    "command": "pip install probegate",
-    "cta": { "zh": "看 30 秒 demo", "en": "Watch the 30s demo" },
-    "ctaGithub": { "zh": "GitHub 源码", "en": "Source on GitHub" },
-    "scroll": { "zh": "往下看它替你拦什么", "en": "See what it catches for you" }
+    "href": "#quickstart",
+    "cta": {
+      "zh": "运行示例",
+      "en": "Run the example"
+    },
+    "ctaGithub": {
+      "zh": "查看源码",
+      "en": "View source"
+    }
+  },
+  "scene": {
+    "kind": "neon-graph",
+    "caption": {
+      "zh": "图示展示组件关系；实际输出见下方示例。",
+      "en": "An illustrative component scene; recorded output appears below."
+    },
+    "fallback": "/assets/presentation/scene-dark.svg",
+    "fallbackLight": "/assets/presentation/scene-light.svg"
   },
   "advantages": [
     {
-      "title": { "zh": "只拦真正没把握的那一步", "en": "Halt only the step that's genuinely uncertain" },
-      "body": {
-        "zh": "单信号都不够：模型嘴上说没把握，或探针单独失败，都只是标记、不拦。只有「模型自报不确定 ∧ 探针真失败」同时出现，才把这一步交给人——其余全部放行。",
-        "en": "Either signal alone is not enough: the model saying it's unsure, or a probe failing on its own, just flags the step. Only when self-reported uncertainty AND a failed probe fire together does the step go to a human — everything else proceeds."
+      "title": {
+        "zh": "理由可见",
+        "en": "Visible rationale"
       },
-      "chips": ["› 不确定度 + 探针 同时亮", "› 单信号只标记不拦", "› AND 门，不误伤"]
+      "body": {
+        "zh": "返回探针证据和触发条件。",
+        "en": "Return probe evidence and trigger conditions."
+      }
     },
     {
-      "title": { "zh": "它说会查的，就真的会查", "en": "What it says it checks, it really checks" },
-      "body": {
-        "zh": "一道兜底门最怕的不是漏报，是「号称会查、却静默放行」——那比不装还危险，给你假的安全感。现在每一项它承诺的检查都真触发：散落的 print 会被抓出来；schema 里说不认识的类型会直接报错，而不是装作「都验过了」；喂进来的怪格式 schema（该是列表却给了字符串、该是对象却给了列表），不会再崩成堆栈、也不会把字符串一个字一个字当成 key 报，而是明明白白告诉你格式不对。每一道检查都配一条回归测试盯着，装作没事的那类 bug 回不来。",
-        "en": "A guardrail's worst failure isn't a miss — it's claiming to check something and then silently letting it through, which is worse than no guardrail because it hands you false confidence. Now every check it promises actually fires: a stray print gets flagged; an unknown schema type is surfaced instead of a fake 'all typed'; a malformed schema block (a list where an object was expected, a string where a list was) no longer crashes into a stack trace or mis-parses a string character-by-character as keys — it tells you plainly the shape is wrong. Every check ships with a regression test pinning it, so the 'pretend-it's-fine' class can't quietly come back."
+      "title": {
+        "zh": "策略明确",
+        "en": "Explicit policy"
       },
-      "chips": ["› 散落 print 会被抓", "› 怪格式 schema 不崩不装", "› 每道检查有测试盯着"]
+      "body": {
+        "zh": "三态避免把所有标记都等同拦截。",
+        "en": "Three states distinguish flags from handoffs."
+      }
     },
     {
-      "title": { "zh": "不确定度是真去查出来的，不是模型自报", "en": "The uncertainty is fetched, not the model's self-report" },
-      "body": {
-        "zh": "一道建在假数字上的门只是表演。所以不确定度不是模型嘴上说的那个数——你把 API 密钥和地址配一次，每一步都真去调一次模型，把每个 token 的评分读回来再算。这恰好是校准最弱的国产模型 serving 层最该有人兜着的地方；它从不单方定生死，只和探针做 AND 才出手。模型回的怪格式（不是预期的结构、字段缺了），不会再崩成一堆看不懂的堆栈、也不会装作没事，而是报一个名字清楚的错，你能看见、能接住；你在配置里填的密钥，每条命令、每个界面都会用上，不会被悄悄丢掉。就算模型那一下抽风（超时、报错、回了乱码）或你的 agent 本来就是异步跑的，门也不会跟着把整条跑死——它退回那条不单方定生死的老路继续走，而不是一崩到底。",
-        "en": "A gate built on a made-up number is theater. So the uncertainty isn't the number the model just says — set the API key and endpoint once, and every step actually calls the model and reads back its per-token scores to compute the number. That's exactly the 国产模型 serving tier, where calibration is weakest and the signal most needs a human backing it; it never decides on its own, only AND-ed with a probe. A malformed response from the model (wrong shape, missing field) no longer crashes into an unreadable stack trace or fake-passes — it raises a plainly named error you can see and catch; the key you put in config is honored by every command and every screen, never silently dropped. And if the model hiccups that instant — a timeout, an error, a garbled response — or your agent runs async, the gate doesn't take the whole run down with it: it falls back to the path that never decides alone and keeps going, instead of crashing the loop."
+      "title": {
+        "zh": "适配现有循环",
+        "en": "Fit existing loops"
       },
-      "chips": ["› 真去调模型读评分", "› 逐 token 算出不确定度", "› 配一次密钥，处处生效", "› 模型抽风不连累整条跑"]
-    },
-    {
-      "title": { "zh": "每一步的判断，都白纸黑字记下来", "en": "Every verdict the gate makes is written down" },
       "body": {
-        "zh": "门拦了哪一步、为什么拦、探针查出什么、模型有多没把握——每一次判断都追加进一个本地的日志文件，你可以随时打开查看、回溯到底哪一步出了岔。不上云、不收费、不碰那个团队付费的导出，就是一个你能随时翻看的本地文件。",
-        "en": "Which step the gate stopped, why it stopped it, what the probe found, how unsure the model was — every verdict is appended to a local log file you can open anytime and trace exactly where things went sideways. No cloud, no paid export, no touching the team-tier relay — just a local file you can read whenever."
-      },
-      "chips": ["› 每个判断都记进本地", "› 可查可回看", "› 不上云、不收费"]
+        "zh": "同步与异步入口可由调用方接管。",
+        "en": "Synchronous and asynchronous callers own the response."
+      }
     }
   ],
-  "scene": { "kind": "hub-nodes", "nodes": ["agent loop", "compile", "test", "lint", "schema", "human"] },
-  "cta": {
-    "headline": { "zh": "给你的国产模型 agent 装一道真兜底门", "en": "Give your 国产模型 agent a gate that actually catches" },
-    "sub": { "zh": "一条命令装上，demo 里第 4 步就会弹门，每个判断都留痕可查。", "en": "Install in one command — the demo trips the gate at step 4, and every verdict is logged for later." },
-    "button": { "zh": "pip install probegate", "en": "pip install probegate" }
+  "story": {
+    "intro": {
+      "title": {
+        "zh": "解决什么问题",
+        "en": "The task it solves"
+      },
+      "body": {
+        "zh": "一个步骤可能语法错误却自信，也可能只是模型表达犹豫。ProbeGate 把不确定度和可执行检查拆成两个信号，明确展示当前策略如何处理它们，方便 Agent 调用方决定继续、标记或请求人工。",
+        "en": "A step may be syntactically wrong yet confident, or merely express uncertainty. ProbeGate separates uncertainty from machine-checkable evidence and makes the handling policy explicit so an agent caller can continue, flag or request human review."
+      }
+    },
+    "sections": [
+      {
+        "title": {
+          "zh": "从输入到结果",
+          "en": "From input to result"
+        },
+        "body": {
+          "zh": "四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。",
+          "en": "Four synthetic spans explicitly supply uncertainty 0.1/0.9 and valid/invalid Python. The real compile probe exercises the AND policy; this is not a live-model calibration experiment."
+        },
+        "image": {
+          "light": "/assets/presentation/process-light.svg",
+          "dark": "/assets/presentation/process-dark.svg",
+          "alt": {
+            "zh": "四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。",
+            "en": "Four synthetic spans explicitly supply uncertainty 0.1/0.9 and valid/invalid Python. The real compile probe exercises the AND policy; this is not a live-model calibration experiment."
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "工作原理",
+          "en": "How it works"
+        },
+        "body": {
+          "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
+          "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
+        },
+        "image": {
+          "light": "/assets/presentation/architecture-light.svg",
+          "dark": "/assets/presentation/architecture-dark.svg",
+          "alt": {
+            "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
+            "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "能力与接入",
+          "en": "Capabilities and integration"
+        },
+        "body": {
+          "zh": "CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。",
+          "en": "CLI and Python API share decision models, and the UI can display per-span decisions. compile byte-compiles Python without running it; other probes have their own input contracts to inspect before integration."
+        },
+        "image": {
+          "light": "/assets/presentation/integrations-light.svg",
+          "dark": "/assets/presentation/integrations-dark.svg",
+          "alt": {
+            "zh": "CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。",
+            "en": "CLI and Python API share decision models, and the UI can display per-span decisions. compile byte-compiles Python without running it; other probes have their own input contracts to inspect before integration."
+          }
+        }
+      }
+    ],
+    "details": [
+      {
+        "title": {
+          "zh": "使用方式",
+          "en": "Usage"
+        },
+        "body": {
+          "zh": "CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。",
+          "en": "CLI and Python API share decision models, and the UI can display per-span decisions. compile byte-compiles Python without running it; other probes have their own input contracts to inspect before integration."
+        }
+      },
+      {
+        "title": {
+          "zh": "配置",
+          "en": "Configuration"
+        },
+        "body": {
+          "zh": "`.probegate.toml` 管理 uncertainty_threshold、probe、model_target、handoff_mode、api_key 与 base_url。默认 threshold=0.5，probe=compile。提供 key 与 URL 后可获取 logprob 信号；获取失败会回退自报值并在理由中注明降级。",
+          "en": "`.probegate.toml` configures uncertainty_threshold, probe, model_target, handoff_mode, api_key and base_url. Defaults are threshold=0.5 and probe=compile. With a key and URL the adapter can fetch a logprob signal; failures fall back to self-report with a degradation marker in the rationale."
+        }
+      }
+    ]
   },
-  "footer": { "tag": { "zh": "MIT 开源 · 国产模型自治 agent 的 per-span 探针校验兜底门", "en": "MIT open source · the per-span probe-validation fallback gate for 国产模型 autonomous agents" } }
+  "demo": {
+    "title": {
+      "zh": "实际运行结果",
+      "en": "Actual demo output"
+    },
+    "note": {
+      "zh": "四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。",
+      "en": "Four synthetic spans explicitly supply uncertainty 0.1/0.9 and valid/invalid Python. The real compile probe exercises the AND policy; this is not a live-model calibration experiment."
+    },
+    "source": "https://github.com/SuperMarioYL/probegate/blob/main/docs/demo-results.json",
+    "steps": [
+      {
+        "label": {
+          "zh": "检查所有信号组合",
+          "en": "Inspect all signal combinations"
+        },
+        "body": {
+          "zh": "只有高不确定度且语法失败的组合进入 handoff。",
+          "en": "Only high uncertainty combined with a syntax failure produces handoff."
+        },
+        "command": ".venv/bin/python examples/presentation-demo.py",
+        "output": "[\n  {\n    \"case\": \"clear\",\n    \"uncertainty\": 0.1,\n    \"probe_passed\": true,\n    \"rule\": \"proceed\"\n  },\n  {\n    \"case\": \"uncertain\",\n    \"uncertainty\": 0.9,\n    \"probe_passed\": true,\n    \"rule\": \"abstain\"\n  },\n  {\n    \"case\": \"syntax_only\",\n    \"uncertainty\": 0.1,\n    \"probe_passed\": false,\n    \"rule\": \"abstain\"\n  },\n  {\n    \"case\": \"both\",\n    \"uncertainty\": 0.9,\n    \"probe_passed\": false,\n    \"rule\": \"handoff\"\n  }\n]\n",
+        "image": "/assets/presentation/demo-0-light.svg",
+        "imageDark": "/assets/presentation/demo-0-dark.svg"
+      }
+    ]
+  },
+  "quickstart": {
+    "title": {
+      "zh": "从完整输入开始",
+      "en": "Start with complete input"
+    },
+    "body": {
+      "zh": "包支持 Python 3.10+；以下使用 Python 3.12 与 uv。演示不加载端点凭证，也不调用模型。",
+      "en": "The package supports Python 3.10+; these instructions use Python 3.12 and uv. The example loads no endpoint credentials and calls no model."
+    },
+    "steps": [
+      {
+        "title": {
+          "zh": "安装",
+          "en": "Install"
+        },
+        "code": "git clone https://github.com/SuperMarioYL/probegate.git\ncd probegate\nuv venv --python 3.12\nuv pip install --python .venv/bin/python -e ."
+      },
+      {
+        "title": {
+          "zh": "运行自带示例",
+          "en": "Run the supplied example"
+        },
+        "code": ".venv/bin/python examples/presentation-demo.py"
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "zh": "低不确定度且探针失败只会 abstain，不会自动 handoff；该 AND 策略不保证拦下所有错误。",
+      "en": "A failed probe with low uncertainty only abstains, without automatic handoff; this AND policy does not catch every error."
+    },
+    {
+      "zh": "通过语法检查不代表程序正确，logprob 或自报值也不等于已校准的正确概率。",
+      "en": "Passing syntax checks does not establish program correctness; logprobs or self-report do not establish calibrated correctness probabilities."
+    }
+  ],
+  "footer": {
+    "tag": "0.5.0 · Python 3.10+ · MIT"
+  }
 }

@@ -1,0 +1,82 @@
+{
+  "name": "ProbeGate",
+  "tagline": "Judge uncertainty alongside probe results.",
+  "architecture": {
+    "title": "ProbeGate / data flow",
+    "nodes": [
+      {
+        "title": "Span",
+        "detail": "Code / step / uncertainty"
+      },
+      {
+        "title": "Uncertainty adapter",
+        "detail": "Supplied or fetched signal"
+      },
+      {
+        "title": "Probe registry",
+        "detail": "Compile / test / lint / schema"
+      },
+      {
+        "title": "GateDecision",
+        "detail": "Rule / evidence / rationale"
+      }
+    ],
+    "edges": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        3
+      ]
+    ]
+  },
+  "process": {
+    "title": "ProbeGate / example workflow",
+    "steps": [
+      {
+        "title": "Provide four spans",
+        "detail": "All signal combinations"
+      },
+      {
+        "title": "Compile Python",
+        "detail": "Real syntax validation"
+      },
+      {
+        "title": "Apply threshold",
+        "detail": "tau = 0.5"
+      }
+    ],
+    "result": "Rules are proceed, abstain, abstain and handoff for the four supplied cases."
+  },
+  "integrations": {
+    "title": "ProbeGate / supported routes",
+    "items": [
+      {
+        "title": "Python API",
+        "detail": "guard / guard_async"
+      },
+      {
+        "title": "JSONL spans",
+        "detail": "CLI fixture input"
+      },
+      {
+        "title": "Probe registry",
+        "detail": "Four implemented check types"
+      },
+      {
+        "title": "FastAPI view",
+        "detail": "Local decisions and review UI"
+      },
+      {
+        "title": "Optional model endpoint",
+        "detail": "Logprob-derived signal"
+      }
+    ]
+  }
+}

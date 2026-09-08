@@ -1,0 +1,17 @@
+{
+  "version": "0.5.0",
+  "scope": "Four explicit synthetic spans and real Python syntax compilation exercise all dual-signal combinations. Uncertainty values are supplied by the script; no model, API or human approval service.",
+  "inputs": [
+    {
+      "path": "examples/presentation-demo.py",
+      "sha256": "042d4c0725108edcdfc82fef8ec63096df0346e063588a7085ee76455790b783"
+    }
+  ],
+  "steps": [
+    {
+      "command": ".venv/bin/python examples/presentation-demo.py",
+      "output": "[\n  {\n    \"case\": \"clear\",\n    \"uncertainty\": 0.1,\n    \"probe_passed\": true,\n    \"rule\": \"proceed\"\n  },\n  {\n    \"case\": \"uncertain\",\n    \"uncertainty\": 0.9,\n    \"probe_passed\": true,\n    \"rule\": \"abstain\"\n  },\n  {\n    \"case\": \"syntax_only\",\n    \"uncertainty\": 0.1,\n    \"probe_passed\": false,\n    \"rule\": \"abstain\"\n  },\n  {\n    \"case\": \"both\",\n    \"uncertainty\": 0.9,\n    \"probe_passed\": false,\n    \"rule\": \"handoff\"\n  }\n]\n",
+      "exit_code": 0
+    }
+  ]
+}

@@ -1,150 +1,134 @@
-[English](./README.en.md) | **简体中文**
+[English](README.en.md) | **简体中文**
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="./assets/hero-light.svg">
-    <img src="./assets/hero-light.svg" width="880" alt="ProbeGate — per-span 探针校验兜底门">
-  </picture>
-</p>
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/hero-mobile-dark.svg">
+  <source media="(max-width: 640px)" srcset="assets/presentation/hero-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/hero-dark.svg">
+  <img src="assets/presentation/hero-light.svg" width="1000" alt="为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。">
+</picture>
 
-<p align="center"><sub>把模型自报不确定度与机器可校验探针配对，仅当双信号同时触发才路由人工——国产模型自治 agent 的 per-span 兜底门。</sub></p>
+**为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。**
 
-<p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="license"></a>
-  <a href="https://github.com/SuperMarioYL/probegate/releases"><img src="https://img.shields.io/github/v/release/SuperMarioYL/probegate?style=flat-square&label=release" alt="release"></a>
-  <a href="https://github.com/SuperMarioYL/probegate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/SuperMarioYL/probegate/ci.yml?branch=main&label=CI&style=flat-square" alt="CI"></a>
-  <img src="https://img.shields.io/badge/python-%E2%89%A53.10-blue?style=flat-square" alt="python">
-</p>
+`v0.5.0` · `Python 3.10+` · [MIT](LICENSE)
 
-**一句话**：你的国产模型 agent 在没把握的步骤上硬编下去——ProbeGate 用「compile/test/lint/schema 探针 ∧ 模型自报不确定度」的 AND 门，只在双信号同时触发时拦下这一 span 找人确认，其余放行。
+[Website](https://probegate.lei6393.com) · [Demo record](docs/demo-results.json)
 
-<h2><img src="https://api.iconify.design/tabler:topology-star-3.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 架构</h2>
+## 为什么使用
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/atlas-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="./assets/atlas-light.svg">
-    <img src="./assets/atlas-light.svg" width="880" alt="ProbeGate 架构：Agent loop → 拦截器 → (UncertaintyAdapter ∧ Probe Registry) → GateDecision → 人工兜底">
-  </picture>
-</p>
+一个步骤可能语法错误却自信，也可能只是模型表达犹豫。ProbeGate 把不确定度和可执行检查拆成两个信号，明确展示当前策略如何处理它们，方便 Agent 调用方决定继续、标记或请求人工。
 
-核心不变式：
+## 架构
 
-```
-handoff ⟺ uncertainty > τ  AND  not probe.passed
-```
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/architecture-mobile-dark.svg">
+  <source media="(max-width: 640px)" srcset="assets/presentation/architecture-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/architecture-dark.svg">
+  <img src="assets/presentation/architecture-light.svg" width="1000" alt="guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。">
+</picture>
 
-单信号都不足以兜底——这正是 ProbeGate 与既有路线的根本区分：[cactus-compute/cactus-hybrid](https://github.com/cactus-compute/cactus-hybrid) 只信模型自白（黑盒解释幻觉），[sickn33/agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills) 的 stack validation 拥有探针层但没接成 in-flight 兜底门。ProbeGate 把国产模型 serving tier 自报置信度最不可信处当成楔子，用 AND 门 + per-span UI 兜住「confidence 虚高 ∧ 探针真失败」的 span。
+guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。
 
-**三态门**：`proceed`（双清，放行）· `abstain`（单信号，标记但不拦）· `handoff`（双触发，路由人工）。
+源码入口：[probegate/gate.py](probegate/gate.py) · [probegate/models.py](probegate/models.py) · [probegate/uncertainty.py](probegate/uncertainty.py) · [probegate/probes/compile_probe.py](probegate/probes/compile_probe.py) · [probegate/probes/test_probe.py](probegate/probes/test_probe.py) · [probegate/probes/lint_probe.py](probegate/probes/lint_probe.py) · [probegate/probes/schema_probe.py](probegate/probes/schema_probe.py) · [probegate/cli.py](probegate/cli.py)
 
-<h2><img src="https://api.iconify.design/tabler:rocket.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 安装 + 快速开始</h2>
+## 安装
+
+包支持 Python 3.10+；以下使用 Python 3.12 与 uv。演示不加载端点凭证，也不调用模型。
 
 ```bash
-pip install probegate
-probegate init                              # 生成 .probegate.toml（选探针 + 阈值 τ）
-probegate demo --model deepseek-coder       # 跑内置 5 步 demo agent，第 4 步弹门
+git clone https://github.com/SuperMarioYL/probegate.git
+cd probegate
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -e .
 ```
 
-<details><summary>样例输出</summary>
+## 快速开始
 
-```
-┏━━━━━━━━━━━━━━ ProbeGate demo ━━━━━━━━━━━━━━┓
-┃ model=deepseek-coder  probe=compile  tau=0.5┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ span span-1 ───────────────────────────╮
-│ span      span-1
-│ uncertainty 0.08
-│ probe     compile → PASS
-│ rule      proceed
-│
-│ uncertainty 0.08 <= tau 0.50 AND probe 'compile' passed
-╰─────────────────────────────────────────╯
-...
-╭─ span span-4 ───────────────────────────╮     ← 故意编错函数签名
-│ uncertainty 0.82
-│ probe     compile → FAIL
-│ rule      handoff                          ← 双信号触发，路由人工
-╰─────────────────────────────────────────╯
+四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。
+
+```bash
+.venv/bin/python examples/presentation-demo.py
 ```
 
-</details>
+完整输入与执行步骤见上方命令及 [Demo 记录](docs/demo-results.json)。
 
-<h2><img src="https://api.iconify.design/tabler:terminal-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 用法</h2>
+## 使用
 
-在 agent loop 外包一层 `ProbeGate`：
+```bash
+.venv/bin/probegate init
+.venv/bin/probegate gate --demo --probe compile
+.venv/bin/probegate ui --port 8000
+```
+自己的 JSONL 每行可写 `{"id":"s1","agent_step":1,"content":"answer = 42","uncertainty":0.1}`，再用 `gate --fake-spans spans.jsonl`。异步 Agent 应 `await gate.guard_async(span)`；调用方必须显式处理 handoff。
 
-```python
-from probegate import ProbeGate, Span
+## 实际 Demo
 
-with ProbeGate(uncertainty_threshold=0.5, probe="compile") as g:
-    for span in agent.run():              # 国产模型每走一步吐一个 span
-        decision = g.guard(span)          # (a) 不确定度 ∧ (b) 探针 → 三态
-        if decision.rule == "handoff":    # 双信号才拦
-            if not ask_human(span):       # N → agent 回退重走该 span
-                rewind(span)
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/process-mobile-dark.svg">
+  <source media="(max-width: 640px)" srcset="assets/presentation/process-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/process-dark.svg">
+  <img src="assets/presentation/process-light.svg" width="1000" alt="四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。">
+</picture>
+
+### 检查所有信号组合
+
+只有高不确定度且语法失败的组合进入 handoff。
+
+```text
+$ .venv/bin/python examples/presentation-demo.py
+[
+  {
+    "case": "clear",
+    "uncertainty": 0.1,
+    "probe_passed": true,
+    "rule": "proceed"
+  },
+  {
+    "case": "uncertain",
+    "uncertainty": 0.9,
+    "probe_passed": true,
+    "rule": "abstain"
+  },
+  {
+    "case": "syntax_only",
+    "uncertainty": 0.1,
+    "probe_passed": false,
+    "rule": "abstain"
+  },
+  {
+    "case": "both",
+    "uncertainty": 0.9,
+    "probe_passed": false,
+    "rule": "handoff"
+  }
+]
 ```
 
-常用子命令：
+## 能力与接入
 
-| 命令 | 作用 |
-|---|---|
-| `probegate init` | 写 `.probegate.toml`（阈值 τ / 探针 / model target） |
-| `probegate demo --model deepseek-coder` | 内置 5 步 agent，第 4 步故意编错签名触发 handoff |
-| `probegate gate --demo --probe compile` | 在内置 demo spans 上跑门，打印每 span 三态 |
-| `probegate gate --fake-spans demo.jsonl` | 在自己的 jsonl span 流上跑门 |
-| `probegate ui --port 8000` | 起本地 FastAPI web 视图，浏览器看 per-span 卡片 + Approve/Reject |
+<picture>
+  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/integrations-mobile-dark.svg">
+  <source media="(max-width: 640px)" srcset="assets/presentation/integrations-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/integrations-dark.svg">
+  <img src="assets/presentation/integrations-light.svg" width="1000" alt="CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。">
+</picture>
 
-jsonl span 格式（每行一个）：
+CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。
 
-```json
-{"id": "s4", "agent_step": 4, "content": "def f(:\n    pass\n", "uncertainty": 0.82}
-```
 
-<h2><img src="https://api.iconify.design/tabler:photo.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Demo</h2>
 
-<p align="center"><img src="./assets/demo.gif" width="880" alt="ProbeGate CLI demo：内置 5 步 agent 第 4 步低置信 + compile 失败 → handoff 弹门"></p>
+## 配置
 
-60s 录屏：DeepSeek-Coder agent 第 4 步低置信 span 触发 compile 探针失败 → ProbeGate 弹出 per-span 人工兜底门；对比未装 gate 的级联翻车。
+`.probegate.toml` 管理 uncertainty_threshold、probe、model_target、handoff_mode、api_key 与 base_url。默认 threshold=0.5，probe=compile。提供 key 与 URL 后可获取 logprob 信号；获取失败会回退自报值并在理由中注明降级。
 
-<h2><img src="https://api.iconify.design/tabler:adjustments.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 配置</h2>
+## 路线图与范围
 
-`.probegate.toml`（`probegate init` 生成）：
+当前包含四种探针、异步入口、端点获取与本地 UI。团队身份、托管中继和更广泛的校准实验仍是后续方向。
 
-| key | type | default | 含义 |
-|---|---|---|---|
-| `uncertainty_threshold` | float | `0.5` | τ——span 不确定度超过它 **且** 探针失败才 handoff |
-| `probe` | `compile\|test\|lint\|schema` | `compile` | 机器可校验探针，m1 默认 compile |
-| `model_target` | string | `deepseek-coder` | 国产模型 serving target（`deepseek-coder` / `qwen3-coder` / `glm-5`） |
-| `handoff_mode` | `cli\|web` | `cli` | 兜底门在 CLI prompt 还是本地 web 视图弹出 |
-| `api_key` | string? | `""` | 国产模型 API key（m3：拉 logprob） |
-| `base_url` | string? | `""` | OpenAI 兼容 base URL（m3：拉 logprob） |
+- 低不确定度且探针失败只会 abstain，不会自动 handoff；该 AND 策略不保证拦下所有错误。
+- 通过语法检查不代表程序正确，logprob 或自报值也不等于已校准的正确概率。
 
-<h2><img src="https://api.iconify.design/tabler:credit-card.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 付费 / Pricing</h2>
+![Terminal recording](assets/demo.gif) · [Recording script](docs/demo.tape)
 
-| 套餐 | 价格 | 覆盖 |
-|---|---|---|
-| **ProbeGate OSS** | 免费 / MIT | 本地 dual-signal 门 + 全部探针 + CLI + 本地 web 视图（v0.1 已交付） |
-| **ProbeGate Team** | ¥499/seat/年（¥49/seat/月） | 审计日志导出 · SSO/团队账号 · hosted per-span 门中继（v0.2+ 收费锚点） |
+## 许可证
 
-商业路径明确面向中文 SME 团队把 agent 接进生产（客服 / 数据分析 / 报表），一次 10 步级联回滚烧掉的半个 dev-day 就够买一年席位。v0.1 只发 OSS 核心，Team 扩展是 v0.2+ 的收费锚点，不是 vaporware。Team 试用：`probegate.dev/team`。
-
-<h2><img src="https://api.iconify.design/tabler:map-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 路线图</h2>
-
-- [x] **m1 — 双信号 AND 门**：`GateDecision` + 不确定度 ∧ compile 探针 + 假 span 流 + CLI 三态打印
-- [ ] **m2 — per-span web 视图**：FastAPI 渲染 trajectory，每 span 一张卡片（不确定度 / 探针结果 / 门状态 / Approve-Reject），接 m1 的 GateDecision
-- [ ] **m3 — 接国产模型 logprob**：UncertaintyAdapter 接 DeepSeek-Coder / Qwen3-Coder / GLM API + 补 test/lint/schema 探针 + 10 分钟对比 demo 录屏
-- [ ] v0.2 — ProbeGate Team：审计日志导出、SSO、hosted 门中继
-
-<h2><img src="https://api.iconify.design/tabler:clipboard-list.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 更新日志</h2>
-
-- **v0.4.0**（加固）：修复 `guard()` 从不拉取 logprob 的缺陷——`--api-key`/`--base-url` 现在真正驱动 `UncertaintyAdapter.fetch_logprob`，双信号门的不确定度半边不再是不可信的自报值（`fix-guard-never-fetches-logprob`）。附带：`parse_logprob_uncertainty` 对非 dict token 条目改抛 `UncertaintyFetchError`（不再泄漏 `AttributeError`）；`/api/guard` 重建 config 时不再丢弃已加载的 creds。
-
-<h2><img src="https://api.iconify.design/tabler:license.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> License + Contributing</h2>
-
-MIT，见 [LICENSE](./LICENSE)。提 issue / PR：[github.com/SuperMarioYL/probegate/issues](https://github.com/SuperMarioYL/probegate/issues)。
-
-推送后建议加 topics：`gh repo edit --add-topic agent --add-topic abstention --add-topic deepseek --add-topic qwen --add-topic glm`。
-
-<p align="center"><sub><a href="./LICENSE">MIT</a> © 2026 SuperMarioYL</sub></p>
+[MIT](LICENSE)
