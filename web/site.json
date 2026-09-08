@@ -104,6 +104,10 @@
           "alt": {
             "zh": "四个合成 span 显式给定 0.1/0.9 不确定度和有效/无效 Python，执行真实 compile 探针并检查 AND 判定。不是实际模型置信校准实验。",
             "en": "Four synthetic spans explicitly supply uncertainty 0.1/0.9 and valid/invalid Python. The real compile probe exercises the AND policy; this is not a live-model calibration experiment."
+          },
+          "mobile": {
+            "light": "/assets/presentation/process-mobile-light.svg",
+            "dark": "/assets/presentation/process-mobile-dark.svg"
           }
         }
       },
@@ -122,6 +126,10 @@
           "alt": {
             "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
             "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
+          },
+          "mobile": {
+            "light": "/assets/presentation/architecture-mobile-light.svg",
+            "dark": "/assets/presentation/architecture-mobile-dark.svg"
           }
         }
       },
@@ -140,6 +148,10 @@
           "alt": {
             "zh": "CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。compile 只做 Python 编译而不运行代码；其他探针有各自输入契约，应在接入前阅读对应模块。",
             "en": "CLI and Python API share decision models, and the UI can display per-span decisions. compile byte-compiles Python without running it; other probes have their own input contracts to inspect before integration."
+          },
+          "mobile": {
+            "light": "/assets/presentation/integrations-mobile-light.svg",
+            "dark": "/assets/presentation/integrations-mobile-dark.svg"
           }
         }
       }
