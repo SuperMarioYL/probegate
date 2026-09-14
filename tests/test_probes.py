@@ -584,3 +584,90 @@ class TestLocalAuditLogContract:
         # the DEFAULT_AUDIT_PATH is the OSS-local location, NOT a Team export
         from probegate.audit import DEFAULT_AUDIT_PATH
         assert str(DEFAULT_AUDIT_PATH) == ".probegate/audit.jsonl"
+
+    def test_read_degrades_on_corrupt_last_line(self, tmp_path: object) -> None:
+        # v0.7.0 fix-audit-log-read-corrupt-line-crash (re-landed on main in
+        # v0.8.0 by fix-release-branch-drift): the audit log is append-only, so
+        # a process killed mid-write (or an OS-level partial write of a large
+        # record, or a hand-edited file) leaves a truncated/corrupt last line.
+        # Pre-v0.7.0 read() did a bare json.loads(line) and raised
+        # json.JSONDecodeError, hiding the salvageable records. Fixed: the
+        # corrupt line is skipped and the salvageable records are returned
+        # (degrade, not crash — the same posture the v0.5.0/v0.6.0 fetch fixes
+        # established).
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        gate = ProbeGate(probe="compile", uncertainty_threshold=0.5)
+        # one valid record
+        log.append_decision(gate.guard(Span(id="s1", agent_step=1, content="x = 1\n", uncertainty=0.1)))
+        # simulate a process killed mid-write leaving a truncated last line
+        # (partial JSON, no trailing newline — the exact byte state a SIGKILL
+        # mid-write leaves)
+        with open(f"{tmp_path}/audit.jsonl", "a", encoding="utf-8") as fh:
+            fh.write('{"type": "decision", "span_id": "s2", "rule": "proce')
+        # read() must NOT raise; it returns the one salvageable valid record
+        records = log.read()
+        assert len(records) == 1
+        assert records[0]["type"] == "decision"
+        assert records[0]["span_id"] == "s1"
+
+    def test_read_fully_corrupt_file_returns_empty(self, tmp_path: object) -> None:
+        # a file with only corrupt lines degrades to [] rather than raising.
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        with open(f"{tmp_path}/audit.jsonl", "w", encoding="utf-8") as fh:
+            fh.write("not json at all\n{also broken\n")
+        assert log.read() == []
+
+
+# --------------------------------------------------------------------------
+# (e) SchemaProbe — CRLF-authored fences must not silently skip validation
+#     (v0.8.0 fix-schema-probe-crlf-fence-false-negative)
+# --------------------------------------------------------------------------
+
+class TestSchemaProbeCrlfFenceContract:
+    """The fence regex required a literal ``\\n`` after the fence label, so a
+    span whose ``probegate:schema`` / ``probegate:payload`` blocks used Windows
+    CRLF line endings never matched: the probe silently PASSED with "no
+    ``probegate:schema`` block" and a schema-violating span escaped the human
+    gate. These tests pin that CRLF fences are parsed and validated exactly
+    like LF ones."""
+
+    CRLF_SCHEMA = (
+        "```probegate:schema\r\n"
+        '{"required": ["endpoint", "method"], "types": {"endpoint": "string"}}\r\n'
+        "```\r\n"
+        "```probegate:payload\r\n"
+        '{"method": 12345}\r\n'
+        "```\r\n"
+    )
+
+    def test_crlf_fences_are_parsed_and_violations_fail(self) -> None:
+        # payload misses the required key `endpoint` and `method` is not a
+        # string — the probe must FAIL with the violation, not claim "no
+        # schema block".
+        result = SchemaProbe().run(_span(self.CRLF_SCHEMA))
+        assert result.passed is False
+        assert "missing required key `endpoint`" in result.evidence
+        assert "no `probegate:schema` block" not in result.evidence
+
+    def test_crlf_conformant_payload_passes(self) -> None:
+        good = (
+            "```probegate:schema\r\n"
+            '{"required": ["endpoint", "method"], "types": {"endpoint": "string"}}\r\n'
+            "```\r\n"
+            "```probegate:payload\r\n"
+            '{"endpoint": "/v1/chat", "method": "POST"}\r\n'
+            "```\r\n"
+        )
+        result = SchemaProbe().run(_span(good))
+        assert result.passed is True
+        assert "2 required key(s) present" in result.evidence
+
+    def test_crlf_span_through_gate_routes_to_handoff(self) -> None:
+        # end-to-end regression: pre-v0.8.0 this span (uncertainty 0.90 > tau
+        # 0.50 AND a failing probe) emitted abstain — the violating span
+        # escaped the human gate purely because of its line endings.
+        gate = ProbeGate(config=ProbeGateConfig(uncertainty_threshold=0.5, probe="schema"))
+        span = Span(id="s-crlf", agent_step=1, content=self.CRLF_SCHEMA, uncertainty=0.9)
+        decision = gate.guard(span)
+        assert decision.rule == "handoff"
+        assert decision.probe is not None and decision.probe.passed is False

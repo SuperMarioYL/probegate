@@ -28,8 +28,15 @@ import re
 from ..models import ProbeResult, Span
 from .base import Probe
 
+# v0.8.0 (fix-schema-probe-crlf-fence-false-negative): the fence pattern must
+# accept CRLF ("\r\n") as well as LF after the fence label. A span authored on
+# Windows or normalised by a CRLF toolchain never matched the old LF-only
+# pattern, so ``_FENCE.findall`` found nothing and the probe silently PASSED
+# with "no `probegate:schema` block" — a false negative that let a
+# schema-violating span escape the human gate. The captured body is
+# ``.strip()``-ed below, so a trailing "\r" is removed before ``json.loads``.
 _FENCE = re.compile(
-    r"```probegate:(schema|payload)\n(.*?)```", re.DOTALL
+    r"```probegate:(schema|payload)\r?\n(.*?)```", re.DOTALL
 )
 
 # python type name -> checker

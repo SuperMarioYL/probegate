@@ -9,7 +9,7 @@
 
 **Produce proceed, abstain or handoff for each span, retaining probe evidence and the decision rationale.**
 
-`v0.5.0` · `Python 3.10+` · [MIT](LICENSE)
+`v0.8.0` · `Python 3.10+` · [MIT](LICENSE)
 
 [Website](https://probegate.lei6393.com) · [Demo record](docs/demo-results.json)
 
