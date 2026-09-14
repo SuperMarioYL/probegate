@@ -18,8 +18,16 @@ regress one surface while bumping the others.
 """
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
+
+# tomllib is stdlib on >=3.11; the pyproject floor is 3.10 (tomli is a
+# declared dependency there), so mirror the guarded import probegate/cli.py
+# uses. An unguarded ``import tomllib`` broke the 3.10 CI matrix — the exact
+# defect the v0.8.0 re-landing of this file exposed on main.
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover — py3.10 only
+    import tomli as tomllib  # type: ignore[no-redef]
 
 import probegate
 from probegate.ui.web import app
