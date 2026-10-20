@@ -27,6 +27,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from . import __version__
+from .audit import LocalAuditLog
 from .gate import ProbeGate
 from .models import ProbeGateConfig, Span
 
@@ -95,6 +96,31 @@ def build_demo_spans() -> list[Span]:
 # Config I/O
 # --------------------------------------------------------------------------
 
+def _toml_basic_str(value: str) -> str:
+    """Render ``value`` as a TOML basic string with escapes applied.
+
+    v0.9.0 (fix-init-toml-injection): _toml_dump used to interpolate
+    api_key/base_url into basic strings with no escaping, so an API key
+    containing a double-quote produced a .probegate.toml that tomllib refuses
+    to parse (every subcommand's config load then failed until hand-edited),
+    and a key containing a backslash was silently corrupted on read-back
+    (``key\\boundary`` round-tripped as ``key\\x08oundary`` — \\b is a valid
+    TOML backspace escape). Escape backslash and double-quote, and emit
+    control characters as \\uXXXX, so the written file always round-trips.
+    """
+    out: list[str] = []
+    for ch in value:
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
 def _toml_dump(cfg: ProbeGateConfig) -> str:
     """Tiny TOML writer (avoids a tomli-w dep for this 6-key config)."""
     lines = [
@@ -102,11 +128,11 @@ def _toml_dump(cfg: ProbeGateConfig) -> str:
         "# handoff <=> uncertainty > threshold AND probe failed",
         "",
         f"uncertainty_threshold = {cfg.uncertainty_threshold}",
-        f'probe = "{cfg.probe}"',
-        f'model_target = "{cfg.model_target}"',
-        f'handoff_mode = "{cfg.handoff_mode}"',
-        f'api_key = "{cfg.api_key or ""}"',
-        f'base_url = "{cfg.base_url or ""}"',
+        f"probe = {_toml_basic_str(cfg.probe)}",
+        f"model_target = {_toml_basic_str(cfg.model_target)}",
+        f"handoff_mode = {_toml_basic_str(cfg.handoff_mode)}",
+        f"api_key = {_toml_basic_str(cfg.api_key or '')}",
+        f"base_url = {_toml_basic_str(cfg.base_url or '')}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -312,6 +338,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
     base = _load_config()
     cfg = _resolve_gate_config(args, base=base)
     gate = ProbeGate(config=cfg)
+    # v0.9.0 (feat-cli-audit-log-wiring): the CLI is the default handoff
+    # surface (handoff_mode "cli") and the documented happy path — persist
+    # each GateDecision and each interactive approve/reject to the local
+    # audit log, mirroring the /api/guard + /api/approve + /api/reject
+    # contract. LOCAL observability only (NOT the Team paid export).
+    audit = LocalAuditLog()
     console.print(
         Panel(
             f"[bold]ProbeGate demo[/]\n"
@@ -323,11 +355,17 @@ def cmd_demo(args: argparse.Namespace) -> int:
     handoffs = 0
     for span in spans:
         decision = gate.guard(span)
+        audit.append_decision(decision)
         _print_decision_panel(decision)
         if decision.rule == "handoff":
             handoffs += 1
             if args.interactive:
                 approved = _interactive_handoff(decision)
+                audit.append_action(
+                    span_id=span.id,
+                    action="approved" if approved else "rejected",
+                    rule="proceed" if approved else "rewind",
+                )
                 console.print(
                     f"  → operator {'approved' if approved else 'rejected'} span {span.id}"
                 )
@@ -353,11 +391,21 @@ def cmd_gate(args: argparse.Namespace) -> int:
     cfg = _resolve_gate_config(args, base=base)
     gate = ProbeGate(config=cfg)
     decisions = gate.guard_many(spans)
+    # v0.9.0 (feat-cli-audit-log-wiring): persist the CLI decisions + the
+    # interactive operator actions to the local audit log (same record shapes
+    # as the web path).
+    audit = LocalAuditLog()
+    audit.append_decision_many(decisions)
     handoffs = _print_decisions_table(decisions, interactive=args.interactive)
     if args.interactive:
         for d in decisions:
             if d.rule == "handoff":
                 approved = _interactive_handoff(d)
+                audit.append_action(
+                    span_id=d.span_id,
+                    action="approved" if approved else "rejected",
+                    rule="proceed" if approved else "rewind",
+                )
                 console.print(
                     f"  → operator {'approved' if approved else 'rejected'} span {d.span_id}"
                 )

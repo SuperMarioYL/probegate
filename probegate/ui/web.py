@@ -33,7 +33,7 @@ from ..models import ModelTarget, ProbeGateConfig, ProbeKind, Span
 
 app = FastAPI(
     title="ProbeGate",
-    version="0.8.0",
+    version="0.9.0",
     description="Per-span probe-validation gate for 国产模型 autonomous agents.",
 )
 
@@ -93,15 +93,24 @@ def get_config() -> dict[str, object]:
 
 
 @app.get("/api/demo")
-def demo() -> dict[str, object]:
-    """Run the built-in 5-step demo agent and return spans + decisions."""
+def demo(audit: bool = True) -> dict[str, object]:
+    """Run the built-in 5-step demo agent and return spans + decisions.
+
+    v0.9.0 (fix-web-ui-double-audit): ``audit=false`` skips the audit-log
+    append. The web UI's run() handler calls /api/demo only to fetch the demo
+    spans and then re-runs the gate via /api/guard (whose decisions are the
+    ones actually rendered and actioned) — without the flag every UI demo run
+    double-logged all five decisions into the local audit jsonl. The default
+    ``audit=True`` preserves the documented contract for direct API consumers.
+    """
     # local import avoids an import-time cycle (cli -> web -> cli)
     from ..cli import build_demo_spans
 
     spans = build_demo_spans()
     gate = ProbeGate(config=_default_config)
     decisions = [gate.guard(s) for s in spans]
-    _audit_log.append_decision_many(decisions)
+    if audit:
+        _audit_log.append_decision_many(decisions)
     return {"spans": [s.model_dump() for s in spans], "decisions": [d.model_dump() for d in decisions]}
 
 

@@ -34,3 +34,6 @@ DRIFT_REPORT.md
 .stage_*
 .claude/
 CLAUDE.md
+
+# --- probegate runtime ---
+.probegate/

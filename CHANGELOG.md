@@ -3,6 +3,42 @@
 All notable changes to ProbeGate are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), one section per release.
 
+## [0.9.0] — 2026-10-21
+
+### Fixed
+
+- **Web UI demo double-logs decisions** (`fix-web-ui-double-audit`): the web
+  UI's run() handler called both `/api/demo` and `/api/guard`, and each
+  endpoint appended every decision to the local audit log — one UI demo run
+  left 10 decision records for 5 spans. `/api/demo` now takes an
+  `audit` query flag (default `true`, contract unchanged) and the UI fetches
+  its spans with `?audit=false`, so only the run whose decisions are rendered
+  and actioned is logged.
+- **`probegate init` wrote unescaped TOML** (`fix-init-toml-injection`):
+  `_toml_dump` interpolated `api_key`/`base_url` into basic strings without
+  escaping — an API key containing a double-quote produced a config file
+  tomllib refuses to parse, and a key containing a backslash was silently
+  corrupted on read-back (`\b` → backspace). The writer now escapes
+  backslash, double-quote, and control characters, so the file always
+  round-trips.
+- **TestProbe skipped async tests** (`fix-test-probe-async-tests-skip`):
+  `async def test_*` functions were invisible to the collector, so a span
+  whose tests were async passed vacuously with the misleading evidence
+  "no test_* functions in span — nothing to verify" — even when an async
+  test contained `assert False`. Async tests are now collected and executed
+  via `asyncio.run`; inside a running event loop they are skipped with
+  honest evidence naming the not-executed tests.
+
+### Added
+
+- **CLI audit-log wiring** (`feat-cli-audit-log-wiring`): `probegate demo`
+  and `probegate gate` now append every `GateDecision` to the local audit log
+  (`.probegate/audit.jsonl`), and interactive approve/reject choices are
+  persisted as action records — the same contract as the web endpoints. The
+  documented CLI happy path finally leaves an audit trail. Local
+  observability only; the Team paid export/SSO/hosted relay stays out of
+  scope.
+
 ## [0.8.0] — 2026-09-14
 
 ### Fixed

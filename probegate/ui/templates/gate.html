@@ -219,7 +219,11 @@
       const tau = parseFloat(document.getElementById("tau").value);
       const model = document.getElementById("model").value;
       try {
-        const res = await fetch("/api/demo");
+        // audit=false: this first call only fetches the demo spans — the gate
+        // is re-run below via /api/guard (whose decisions are the ones rendered
+        // and actioned), so logging here would double-log every decision
+        // (v0.9.0 fix-web-ui-double-audit).
+        const res = await fetch("/api/demo?audit=false");
         const data = await res.json();
         // re-run the gate with current controls via /api/guard so the UI
         // reflects the operator's probe/tau choice, not just the default.

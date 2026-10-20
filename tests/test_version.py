@@ -57,10 +57,10 @@ def test_all_three_version_surfaces_agree() -> None:
     )
 
 
-def test_shipped_version_is_v0_8_0() -> None:
-    # The v0.8.0 release tag MUST be reflected in every reporting surface
+def test_shipped_version_is_v0_9_0() -> None:
+    # The v0.9.0 release tag MUST be reflected in every reporting surface
     # (v0.6.0 reported 0.5.0 and v0.7.0 never reached the default branch —
     # the exact drift this lineage of fixes closes).
-    assert probegate.__version__ == "0.8.0"
-    assert _pyproject_version() == "0.8.0"
-    assert app.version == "0.8.0"
+    assert probegate.__version__ == "0.9.0"
+    assert _pyproject_version() == "0.9.0"
+    assert app.version == "0.9.0"

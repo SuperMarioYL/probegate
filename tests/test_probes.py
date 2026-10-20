@@ -21,18 +21,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from probegate.audit import LocalAuditLog
-from probegate.cli import _load_config, _resolve_gate_config, main
+from probegate.cli import _load_config, _resolve_gate_config, _toml_dump, main
 from probegate.gate import ProbeGate
 from probegate.models import ProbeGateConfig, Span
 from probegate.probes.lint_probe import LintProbe
 from probegate.probes.schema_probe import SchemaProbe
+from probegate.probes.test_probe import TestProbe
 from probegate.uncertainty import (
     UncertaintyAdapter,
     UncertaintyConfigError,
     UncertaintyFetchError,
     parse_logprob_uncertainty,
 )
-from probegate.ui.web import app, set_audit_log
+from probegate.ui.web import app, set_audit_log, set_default_config
 
 
 def _span(content: str, *, id: str = "s", step: int = 1) -> Span:
@@ -671,3 +672,167 @@ class TestSchemaProbeCrlfFenceContract:
         decision = gate.guard(span)
         assert decision.rule == "handoff"
         assert decision.probe is not None and decision.probe.passed is False
+
+
+# --------------------------------------------------------------------------
+# (f) Web UI demo flow — decisions must not be double-logged into the local
+#     audit log (v0.9.0 fix-web-ui-double-audit)
+# --------------------------------------------------------------------------
+
+class TestWebDemoAuditContract:
+    """gate.html's run() calls GET /api/demo (only to fetch the demo spans)
+    and then POST /api/guard (whose decisions are the ones rendered and
+    actioned). Pre-v0.9.0 BOTH endpoints appended decisions, so one UI demo
+    run left 10 decision records in audit.jsonl for 5 spans."""
+
+    def _reset(self, tmp_path: object) -> LocalAuditLog:
+        log = LocalAuditLog(path=f"{tmp_path}/audit.jsonl")
+        set_audit_log(log)
+        set_default_config(None)
+        return log
+
+    def test_exact_ui_flow_logs_each_decision_once(self, tmp_path: object) -> None:
+        client = TestClient(app)
+        log = self._reset(tmp_path)
+        demo = client.get("/api/demo?audit=false")
+        client.post("/api/guard", json={"spans": demo.json()["spans"]})
+        records = [r for r in log.read() if r.get("type") == "decision"]
+        assert len(records) == 5
+
+    def test_demo_audit_false_appends_nothing(self, tmp_path: object) -> None:
+        client = TestClient(app)
+        log = self._reset(tmp_path)
+        resp = client.get("/api/demo?audit=false")
+        assert resp.status_code == 200
+        assert len(resp.json()["spans"]) == 5
+        assert len(resp.json()["decisions"]) == 5
+        assert log.read() == []
+
+    def test_demo_default_audit_true_still_appends(self, tmp_path: object) -> None:
+        # the documented /api/demo contract (decisions appended) is unchanged
+        client = TestClient(app)
+        log = self._reset(tmp_path)
+        client.get("/api/demo")
+        records = [r for r in log.read() if r.get("type") == "decision"]
+        assert len(records) == 5
+
+
+# --------------------------------------------------------------------------
+# (g) _toml_dump escaping — an init-written config must round-trip
+#     (v0.9.0 fix-init-toml-injection)
+# --------------------------------------------------------------------------
+
+class TestTomlDumpEscapingContract:
+    """_toml_dump used to interpolate api_key/base_url into TOML basic strings
+    with no escaping: an api_key containing a double-quote produced a
+    .probegate.toml that tomllib refuses to parse, and a key containing a
+    backslash was silently corrupted on read-back (\\b -> backspace)."""
+
+    def test_quote_and_backslash_keys_round_trip(self, tmp_path: object) -> None:
+        cfg = ProbeGateConfig(api_key='sk"quote', base_url="http://back\\slash")
+        path = tmp_path / ".probegate.toml"
+        path.write_text(_toml_dump(cfg), encoding="utf-8")
+        loaded = _load_config(path)
+        assert loaded is not None
+        assert loaded.api_key == 'sk"quote'
+        assert loaded.base_url == "http://back\\slash"
+
+    def test_control_character_key_is_escaped(self, tmp_path: object) -> None:
+        cfg = ProbeGateConfig(api_key="key\bboundary")
+        path = tmp_path / ".probegate.toml"
+        path.write_text(_toml_dump(cfg), encoding="utf-8")
+        loaded = _load_config(path)
+        assert loaded is not None
+        assert loaded.api_key == "key\bboundary"
+
+    def test_init_then_demo_loads_hostile_key(self, tmp_path: object, monkeypatch: object) -> None:
+        # end-to-end: `probegate init --api-key 'sk"quote'` followed by
+        # `probegate demo` must load the config, not die on a TOMLDecodeError.
+        monkeypatch.chdir(tmp_path)
+        assert main(["init", "--api-key", 'sk"quote']) == 0
+        assert main(["demo"]) == 0
+
+
+# --------------------------------------------------------------------------
+# (h) TestProbe — async def test_* must be executed, not silently skipped
+#     (v0.9.0 fix-test-probe-async-tests-skip)
+# --------------------------------------------------------------------------
+
+class TestTestProbeAsyncContract:
+    """test_names collected ast.FunctionDef only, so an `async def test_*`
+    was never run and an async-test span passed vacuously with the misleading
+    evidence "no test_* functions in span — nothing to verify"."""
+
+    def test_failing_async_test_fails_the_probe(self) -> None:
+        code = "async def test_payload():\n    assert False, 'violating span'\n"
+        result = TestProbe().run(_span(code))
+        assert result.passed is False
+        assert "test_payload" in result.evidence
+        assert "no test_* functions" not in result.evidence
+
+    def test_passing_async_test_passes_and_is_counted(self) -> None:
+        code = "async def test_ok():\n    assert 1 + 1 == 2\n"
+        result = TestProbe().run(_span(code))
+        assert result.passed is True
+        assert "1 test_* function(s) passed" in result.evidence
+
+    def test_mixed_sync_and_async_both_run(self) -> None:
+        code = (
+            "def test_sync():\n"
+            "    assert True\n"
+            "async def test_async():\n"
+            "    assert True\n"
+        )
+        result = TestProbe().run(_span(code))
+        assert result.passed is True
+        assert "2 test_* function(s) passed" in result.evidence
+
+    def test_async_tests_inside_running_loop_reported_honestly(self) -> None:
+        # the guard_async context: probe.run() executes inside a running loop,
+        # where asyncio.run would crash — the tests are skipped with honest
+        # evidence naming them, never the false "nothing to verify" pass.
+        code = "async def test_loop():\n    assert True\n"
+
+        async def call() -> object:
+            return TestProbe().run(_span(code))
+
+        result = asyncio.run(call())
+        assert "no test_* functions" not in result.evidence
+        assert "test_loop" in result.evidence
+        assert "not executed" in result.evidence
+        assert result.passed is True
+
+
+# --------------------------------------------------------------------------
+# (i) CLI audit-log wiring — demo/gate decisions + interactive operator
+#     actions are persisted (v0.9.0 feat-cli-audit-log-wiring)
+# --------------------------------------------------------------------------
+
+class TestCliAuditWiringContract:
+    """The v0.3.0 audit-log feature wired only the web endpoints; the CLI —
+    the default handoff surface and the documented happy path — logged
+    nothing. The CLI now persists each GateDecision and each interactive
+    approve/reject, mirroring /api/guard + /api/approve + /api/reject."""
+
+    def _log(self, tmp_path: object) -> LocalAuditLog:
+        return LocalAuditLog(path=tmp_path / ".probegate" / "audit.jsonl")
+
+    def test_cmd_gate_persists_decisions(self, tmp_path: object, monkeypatch: object) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert main(["gate", "--demo"]) == 0
+        records = [r for r in self._log(tmp_path).read() if r.get("type") == "decision"]
+        assert len(records) == 5
+
+    def test_cmd_demo_interactive_reject_persists_action(self, tmp_path: object, monkeypatch: object) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("probegate.cli.Confirm.ask", lambda *a, **k: False)
+        assert main(["demo", "--interactive"]) == 0
+        records = self._log(tmp_path).read()
+        decisions = [r for r in records if r.get("type") == "decision"]
+        actions = [r for r in records if r.get("type") == "action"]
+        assert len(decisions) == 5
+        # spans 4 and 5 both hand off with the compile probe at tau 0.5
+        assert len(actions) == 2
+        assert {a["span_id"] for a in actions} == {"span-4", "span-5"}
+        assert all(a["action"] == "rejected" for a in actions)
+        assert all(a["rule"] == "rewind" for a in actions)

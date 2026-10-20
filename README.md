@@ -9,7 +9,7 @@
 
 **为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。**
 
-`v0.8.0` · `Python 3.10+` · [MIT](LICENSE)
+`v0.9.0` · `Python 3.10+` · [MIT](LICENSE)
 
 [Website](https://probegate.lei6393.com) · [Demo record](docs/demo-results.json)
 
