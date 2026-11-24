@@ -246,3 +246,65 @@ class TestConfig:
     def test_config_clamps_via_pydantic_validation(self) -> None:
         with pytest.raises(Exception):
             ProbeGateConfig(uncertainty_threshold=1.5)
+
+
+# --------------------------------------------------------------------------
+# Probe applicability — a probe that verified nothing is not a cleared signal
+# (v0.10.0 fix-inapplicable-probe-fail-open)
+# --------------------------------------------------------------------------
+
+class TestProbeApplicabilityContract:
+    """SchemaProbe with no schema block and TestProbe with no test_* function
+    report ``passed=True`` because there was nothing to check. Before v0.10.0
+    that vacuous pass cleared the probe signal: a confident span proceeded with
+    a rationale claiming the probe passed, and an uncertain span abstained
+    instead of routing to a human — a span nothing validated escaped the gate.
+    """
+
+    def test_confident_unverifiable_span_does_not_proceed(self) -> None:
+        gate = ProbeGate(probe="schema", uncertainty_threshold=0.5)
+        d = gate.guard(span("answer = 42\n", 0.05))
+        assert d.probe is not None
+        assert d.probe.passed is True
+        assert d.probe.applicable is False
+        assert d.rule == "abstain"
+        assert "NOT APPLICABLE" in d.rationale
+        assert "passed" not in d.rationale
+
+    def test_uncertain_unverifiable_span_routes_to_handoff(self) -> None:
+        gate = ProbeGate(probe="schema", uncertainty_threshold=0.5)
+        d = gate.guard(span("answer = 42\n", 0.9))
+        assert d.rule == "handoff"
+        assert "NOT APPLICABLE" in d.rationale
+
+    def test_test_probe_without_any_test_is_not_a_verification(self) -> None:
+        gate = ProbeGate(probe="test", uncertainty_threshold=0.5)
+        d = gate.guard(span("def add(a, b):\n    return a + b\n", 0.9))
+        assert d.probe is not None
+        assert d.probe.applicable is False
+        assert d.rule == "handoff"
+
+    def test_applicable_probe_still_proceeds(self) -> None:
+        code = (
+            "```probegate:schema\n"
+            '{"required": ["endpoint"]}\n'
+            "```\n"
+            "```probegate:payload\n"
+            '{"endpoint": "/v1/chat"}\n'
+            "```\n"
+        )
+        gate = ProbeGate(probe="schema", uncertainty_threshold=0.5)
+        d = gate.guard(span(code, 0.05))
+        assert d.probe is not None
+        assert d.probe.applicable is True
+        assert d.probe.passed is True
+        assert d.rule == "proceed"
+
+    def test_failing_applicable_probe_is_unchanged(self) -> None:
+        # The applicability fix must not disturb a real FAILED verdict.
+        gate = ProbeGate(probe="compile", uncertainty_threshold=0.5)
+        d = gate.guard(span(BAD_CODE, 0.9))
+        assert d.probe is not None
+        assert d.probe.applicable is True
+        assert d.rule == "handoff"
+        assert "FAILED" in d.rationale

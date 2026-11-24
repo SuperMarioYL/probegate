@@ -3,6 +3,44 @@
 All notable changes to ProbeGate are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), one section per release.
 
+## [0.10.0] — 2026-11-25
+
+### Fixed
+
+- **TestProbe crashed on any non-def module-level statement**
+  (`fix-test-probe-non-def-crash`): the v0.9.0 async-test refactor replaced the
+  `isinstance(node, ast.FunctionDef)` filter with a bare
+  `node.name.startswith("test_")` over `tree.body`. Every top-level import,
+  assignment, `if` or docstring has no `.name`, so a normal span raised
+  `AttributeError` out of `probe.run` — past `ProbeGate.guard` (which does not
+  wrap the probe call) and past `cli.main` (which does not catch
+  `AttributeError`) — and the CLI died with a traceback instead of a table.
+  The node type is now checked first; the async collection semantics are
+  unchanged.
+- **A probe that verified nothing read as a passing probe**
+  (`fix-inapplicable-probe-fail-open`): the schema probe on a span with no
+  `probegate:schema` block and the test probe on a span with no `test_*`
+  function returned `passed=True` with "nothing to validate/verify" evidence,
+  and the gate treated that as a cleared probe signal — a confident unverified
+  span produced `proceed` ("probe '...' passed") and an uncertain unverified
+  span produced `abstain` instead of `handoff`, so a span nothing checked
+  escaped the human gate. `ProbeResult` now carries `applicable`; a vacuous
+  pass is `applicable=False`, the gate labels it `NOT APPLICABLE`, and such a
+  span can only abstain or hand off. This also covers async tests skipped
+  inside a running event loop when no sync test ran (the v0.9.0 "not executed"
+  branch was itself a vacuous pass).
+- **`GET /api/config` returned the configured API key**
+  (`fix-api-config-secret-leak`): the endpoint serialized
+  `ProbeGateConfig.model_dump()` verbatim, so `api_key` was served in plaintext
+  over the local HTTP surface to a route the web UI never calls. The key is now
+  redacted to `""` and `api_key_set` reports whether creds are configured.
+- **Malformed span files crashed instead of naming the bad line**
+  (`fix-fake-spans-malformed-line`): `_load_spans` built `Span(**json.loads(line))`
+  with no shape check and no line number, so a non-object line (`[1, 2]`)
+  raised an uncaught `TypeError` and bad JSON / a missing field never said which
+  line was wrong. Every load failure is now a `ValueError` prefixed with
+  `<path>:<line>`.
+
 ## [0.9.0] — 2026-10-21
 
 ### Fixed

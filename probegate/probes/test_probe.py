@@ -44,20 +44,30 @@ class TestProbe(Probe):
         # v0.9.0 (fix-test-probe-async-tests-skip): collect BOTH def flavors —
         # an async def test_* is a test_* function and its failures must fail
         # the probe, not vanish behind "no test_* functions" evidence.
+        #
+        # v0.10.0 (fix-test-probe-non-def-crash): check the node type FIRST.
+        # ``tree.body`` holds every top-level statement, and only def nodes
+        # carry ``.name``; the v0.9.0 async refactor dereferenced ``.name``
+        # before the isinstance check, so any module-level import, assignment,
+        # ``if`` or docstring raised AttributeError out of ``run()`` — past
+        # ``ProbeGate.guard`` (which does not wrap the probe call) and past
+        # ``cli.main`` (which does not catch AttributeError), tearing down the
+        # agent loop the gate exists to protect.
         sync_names: list[str] = []
         async_names: list[str] = []
         for n in tree.body:
-            if not n.name.startswith("test_"):
-                continue
             if isinstance(n, ast.AsyncFunctionDef):
-                async_names.append(n.name)
+                if n.name.startswith("test_"):
+                    async_names.append(n.name)
             elif isinstance(n, ast.FunctionDef):
-                sync_names.append(n.name)
+                if n.name.startswith("test_"):
+                    sync_names.append(n.name)
         if not sync_names and not async_names:
             return ProbeResult(
                 probe="test",
                 passed=True,
                 evidence="no test_* functions in span — nothing to verify",
+                applicable=False,
             )
 
         ns: dict[str, object] = {}
@@ -106,6 +116,12 @@ class TestProbe(Probe):
                 return ProbeResult(
                     probe="test",
                     passed=True,
+                    # v0.10.0 (fix-inapplicable-probe-fail-open): with no sync
+                    # test executed either, this pass verified nothing — the
+                    # gate must not read it as a cleared probe signal. If a
+                    # sync test did run and pass, the span WAS verified (the
+                    # evidence still names the async tests that were skipped).
+                    applicable=bool(sync_names),
                     evidence=(
                         f"{len(async_names)} async test_* function(s) not executed "
                         f"({skipped}) — probe called inside a running event loop"

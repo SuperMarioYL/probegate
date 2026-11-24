@@ -836,3 +836,139 @@ class TestCliAuditWiringContract:
         assert {a["span_id"] for a in actions} == {"span-4", "span-5"}
         assert all(a["action"] == "rejected" for a in actions)
         assert all(a["rule"] == "rewind" for a in actions)
+
+
+# --------------------------------------------------------------------------
+# (j) TestProbe — a module-level non-def statement must not crash the probe
+#     (v0.10.0 fix-test-probe-non-def-crash; a v0.9.0 regression)
+# --------------------------------------------------------------------------
+
+class TestTestProbeNonDefStatementContract:
+    """The v0.9.0 async refactor replaced
+    ``for n in tree.body if isinstance(n, ast.FunctionDef) and ...`` with a
+    bare ``n.name.startswith("test_")`` over ``tree.body``. Every top-level
+    statement that is not a def (import/assignment/if/docstring) has no
+    ``.name``, so a normal span raised AttributeError out of ``probe.run`` —
+    and neither ``ProbeGate.guard`` nor ``cli.main`` catches it, so the CLI
+    died with a traceback instead of a table."""
+
+    SPAN_CODE = (
+        "import json\n"
+        "\n"
+        "LIMIT = 3\n"
+        "\n"
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "def test_add():\n"
+        "    assert add(1, 2) == 3\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        '    print(json.dumps({"limit": LIMIT}))\n'
+    )
+
+    def test_span_with_import_and_assignment_does_not_crash(self) -> None:
+        result = TestProbe().run(_span(self.SPAN_CODE))
+        assert result.passed is True
+        assert result.applicable is True
+        assert "1 test_* function(s) passed" in result.evidence
+
+    def test_embedded_test_still_runs_and_fails(self) -> None:
+        # The isinstance fix must not turn real tests into no-ops.
+        code = (
+            "import json\n"
+            "\n"
+            "def test_encoding():\n"
+            "    assert json.dumps([]) == \"nope\"\n"
+        )
+        result = TestProbe().run(_span(code))
+        assert result.passed is False
+        assert "test_encoding" in result.evidence
+
+    def test_gate_guard_survives_non_def_module_body(self) -> None:
+        gate = ProbeGate(uncertainty_threshold=0.5, probe="test")
+        decision = gate.guard(_span(self.SPAN_CODE, id="s1"))
+        assert decision.rule == "proceed"
+        assert decision.probe is not None and decision.probe.passed is True
+
+
+# --------------------------------------------------------------------------
+# (k) GET /api/config must never echo the configured api_key
+#     (v0.10.0 fix-api-config-secret-leak)
+# --------------------------------------------------------------------------
+
+class TestWebConfigRedactionContract:
+    """``/api/config`` returned ``ProbeGateConfig.model_dump()`` verbatim, so a
+    configured key was served in plaintext over local HTTP to a route the UI
+    never calls."""
+
+    def test_config_endpoint_does_not_return_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "probegate.ui.web._default_config",
+            ProbeGateConfig(api_key="sk-live-SECRET-123", base_url="https://api.deepseek.com/v1"),
+        )
+        r = TestClient(app).get("/api/config")
+        assert r.status_code == 200
+        body = r.json()
+        assert "sk-live-SECRET-123" not in r.text
+        assert body["api_key"] == ""
+        assert body["api_key_set"] is True
+        # the non-secret surface is still served
+        assert body["base_url"] == "https://api.deepseek.com/v1"
+        assert body["uncertainty_threshold"] == 0.5
+        assert body["probe"] == "compile"
+
+    def test_no_creds_configured_reports_unset(self) -> None:
+        r = TestClient(app).get("/api/config")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["api_key"] == ""
+        assert body["api_key_set"] is False
+
+
+# --------------------------------------------------------------------------
+# (l) A malformed span JSONL line is a clean, line-numbered error
+#     (v0.10.0 fix-fake-spans-malformed-line)
+# --------------------------------------------------------------------------
+
+class TestFakeSpansErrorContract:
+    """``_load_spans`` trusted each line to be a mapping, so a ``[1, 2]`` line
+    raised an uncaught TypeError past main()'s handler, and neither bad JSON
+    nor a missing field said which line was wrong."""
+
+    def test_non_object_line_is_a_clean_error(
+        self, tmp_path: object, monkeypatch: object
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "spans.jsonl"
+        path.write_text("[1, 2]\n", encoding="utf-8")
+        # relative path keeps the rendered message short enough that rich does
+        # not wrap it mid-path (the assertion below checks the path:line prefix)
+        assert main(["gate", "--fake-spans", "spans.jsonl"]) == 1
+
+    def test_bad_json_line_names_the_line(
+        self, tmp_path: object, monkeypatch: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "spans.jsonl"
+        path.write_text(
+            '{"id": "s1", "agent_step": 1, "content": "x = 1", "uncertainty": 0.1}\n'
+            '{"id": oops}\n',
+            encoding="utf-8",
+        )
+        assert main(["gate", "--fake-spans", "spans.jsonl"]) == 1
+        captured = capsys.readouterr()
+        assert "spans.jsonl:2" in captured.out + captured.err
+
+    def test_missing_field_line_names_the_line(
+        self, tmp_path: object, monkeypatch: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        path = tmp_path / "spans.jsonl"
+        path.write_text('{"id": "s1"}\n', encoding="utf-8")
+        assert main(["gate", "--fake-spans", "spans.jsonl"]) == 1
+        captured = capsys.readouterr()
+        assert "spans.jsonl:1" in captured.out + captured.err
+        assert "invalid span" in captured.out + captured.err

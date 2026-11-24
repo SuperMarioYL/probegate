@@ -244,14 +244,34 @@ def cmd_init(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 def _load_spans(path: str) -> list[Span]:
+    """Load a JSONL span file, naming the offending `path:line` on failure.
+
+    v0.10.0 (fix-fake-spans-malformed-line): each line used to go straight into
+    ``Span(**json.loads(line))`` with no shape check and no line number, so a
+    non-object line (`[1, 2]`) raised an uncaught TypeError past main()'s
+    ValueError net, and bad JSON / a missing field never said which line was
+    wrong. Every failure is now a ValueError carrying `<path>:<line>`.
+    """
     spans: list[Span] = []
     with Path(path).open("r", encoding="utf-8") as fh:
         for lineno, raw in enumerate(fh, 1):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            obj = json.loads(line)
-            spans.append(Span(**obj))
+            where = f"{path}:{lineno}"
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{where}: invalid JSON: {exc.msg}") from exc
+            if not isinstance(obj, dict):
+                raise ValueError(
+                    f"{where}: each span line must be a JSON object, "
+                    f"got {type(obj).__name__}"
+                )
+            try:
+                spans.append(Span(**obj))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{where}: invalid span: {exc}") from exc
     if not spans:
         raise ValueError(f"no spans parsed from {path}")
     return spans

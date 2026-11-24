@@ -250,22 +250,32 @@ class ProbeGate:
     ) -> GateDecision:
         tau = self.config.uncertainty_threshold
         high_uncertainty = span.uncertainty > tau
-        probe_failed = not probe_result.passed
+        # v0.10.0 (fix-inapplicable-probe-fail-open): a probe that had nothing
+        # to check reports passed=True/applicable=False. That span was NOT
+        # verified, so it must trip the probe signal — otherwise a confident
+        # unverified span reads as "proceed" and an uncertain one escapes the
+        # human handoff the gate exists to force.
+        probe_unverified = not probe_result.passed or not probe_result.applicable
 
         signals: list[str] = []
         if high_uncertainty:
             signals.append(
                 f"uncertainty {span.uncertainty:.2f} > tau {tau:.2f}"
             )
-        if probe_failed:
+        if not probe_result.applicable:
+            signals.append(
+                f"probe '{probe_result.probe}' NOT APPLICABLE: "
+                f"{probe_result.evidence or 'nothing to verify'}"
+            )
+        elif not probe_result.passed:
             signals.append(
                 f"probe '{probe_result.probe}' FAILED: {probe_result.evidence or 'no evidence'}"
             )
 
-        if high_uncertainty and probe_failed:
+        if high_uncertainty and probe_unverified:
             rule = "handoff"
             rationale = "DUAL SIGNAL: " + " AND ".join(signals) + " => route to human"
-        elif high_uncertainty or probe_failed:
+        elif high_uncertainty or probe_unverified:
             rule = "abstain"
             rationale = "single signal only: " + "; ".join(signals) + " — no handoff (AND gate not satisfied)"
         else:

@@ -9,7 +9,7 @@
 
 **为每个 span 输出 proceed、abstain 或 handoff，保留探针证据与判定理由。**
 
-`v0.9.0` · `Python 3.10+` · [MIT](LICENSE)
+`v0.10.0` · `Python 3.10+` · [MIT](LICENSE)
 
 [Website](https://probegate.lei6393.com) · [Demo record](docs/demo-results.json)
 
@@ -23,10 +23,10 @@
   <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/architecture-mobile-dark.svg">
   <source media="(max-width: 640px)" srcset="assets/presentation/architecture-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/architecture-dark.svg">
-  <img src="assets/presentation/architecture-light.svg" width="1000" alt="guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。">
+  <img src="assets/presentation/architecture-light.svg" width="1000" alt="guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针未通过（失败或不适用）时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。">
 </picture>
 
-guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。
+guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针未通过（失败或不适用）时 handoff；单信号触发为 abstain，双清为 proceed。探针没有可校验输入时记为不适用（不等于通过），此时该 span 不会 proceed。返回值本身不停止调用方的 Agent。
 
 源码入口：[probegate/gate.py](probegate/gate.py) · [probegate/models.py](probegate/models.py) · [probegate/uncertainty.py](probegate/uncertainty.py) · [probegate/probes/compile_probe.py](probegate/probes/compile_probe.py) · [probegate/probes/test_probe.py](probegate/probes/test_probe.py) · [probegate/probes/lint_probe.py](probegate/probes/lint_probe.py) · [probegate/probes/schema_probe.py](probegate/probes/schema_probe.py) · [probegate/cli.py](probegate/cli.py)
 
@@ -124,6 +124,7 @@ CLI 和 Python API 使用同一套决策模型，UI 可展示逐 span 决策。c
 
 当前包含四种探针、异步入口、端点获取与本地 UI。团队身份、托管中继和更广泛的校准实验仍是后续方向。
 
+- 探针没有可校验输入时记为不适用（如 schema 探针遇到无 schema 块的 span）：不会被当成通过，最多 abstain，高不确定度仍会 handoff。
 - 低不确定度且探针失败只会 abstain，不会自动 handoff；该 AND 策略不保证拦下所有错误。
 - 通过语法检查不代表程序正确，logprob 或自报值也不等于已校准的正确概率。
 

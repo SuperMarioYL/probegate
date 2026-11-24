@@ -12,7 +12,8 @@ carry the gate state:
 
 Key invariant (see ``probegate/gate.py``)::
 
-    handoff <=> uncertainty > tau AND not probe.passed
+    handoff <=> uncertainty > tau AND the probe did not verify the span
+               (it failed, or it had nothing to check)
 """
 from __future__ import annotations
 
@@ -41,11 +42,19 @@ class Span(BaseModel):
 
 
 class ProbeResult(BaseModel):
-    """The verdict of a machine-checkable probe over a span."""
+    """The verdict of a machine-checkable probe over a span.
+
+    ``applicable`` separates "the probe ran and the span passed" from "there
+    was nothing for this probe to check". A vacuous pass
+    (``passed=True, applicable=False``) means the span was NOT verified — a
+    probe with no schema block or no test function to run cannot clear the
+    span, so the gate must not read it as a passed probe signal.
+    """
 
     probe: ProbeKind
     passed: bool
     evidence: str = ""
+    applicable: bool = True
 
 
 class GateDecision(BaseModel):

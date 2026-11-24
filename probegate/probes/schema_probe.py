@@ -66,10 +66,15 @@ class SchemaProbe(Probe):
 
         schema_src = blocks.get("schema")
         if not schema_src:
+            # v0.10.0 (fix-inapplicable-probe-fail-open): a span with no schema
+            # block was never validated — the pass is vacuous, so mark the
+            # result not-applicable instead of letting the gate read "nothing
+            # to validate against" as a verified span.
             return ProbeResult(
                 probe="schema",
                 passed=True,
                 evidence="no `probegate:schema` block — nothing to validate against",
+                applicable=False,
             )
 
         try:

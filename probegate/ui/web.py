@@ -33,7 +33,7 @@ from ..models import ModelTarget, ProbeGateConfig, ProbeKind, Span
 
 app = FastAPI(
     title="ProbeGate",
-    version="0.9.0",
+    version="0.10.0",
     description="Per-span probe-validation gate for 国产模型 autonomous agents.",
 )
 
@@ -88,8 +88,20 @@ def health() -> dict[str, str]:
 
 @app.get("/api/config")
 def get_config() -> dict[str, object]:
+    """Return the non-secret config surface.
+
+    v0.10.0 (fix-api-config-secret-leak): this endpoint used to return
+    ``cfg.model_dump()`` verbatim, so the configured ``api_key`` was served in
+    plaintext over the local HTTP surface (and into any browser devtools /
+    proxy log) while the UI never consumed this route. The key is redacted;
+    ``api_key_set`` keeps the useful "are creds configured" signal without the
+    credential.
+    """
     cfg = _default_config or ProbeGateConfig()
-    return cfg.model_dump()
+    data: dict[str, object] = cfg.model_dump()
+    data["api_key"] = ""
+    data["api_key_set"] = bool(cfg.api_key)
+    return data
 
 
 @app.get("/api/demo")

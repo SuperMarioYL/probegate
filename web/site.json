@@ -10,7 +10,7 @@
   },
   "meta": {
     "visual_profile": "neon-particle",
-    "content_version": "0.9.0",
+    "content_version": "0.10.0",
     "demo_source": "docs/demo-results.json"
   },
   "hero": {
@@ -52,8 +52,8 @@
         "en": "Visible rationale"
       },
       "body": {
-        "zh": "返回探针证据和触发条件。",
-        "en": "Return probe evidence and trigger conditions."
+        "zh": "返回探针证据和触发条件；探针没有可校验输入时记为不适用，不会被当成通过。",
+        "en": "Return probe evidence and trigger conditions; a probe with nothing to check is marked not applicable rather than passed."
       }
     },
     {
@@ -117,15 +117,15 @@
           "en": "How it works"
         },
         "body": {
-          "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
-          "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
+          "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针未通过（失败或不适用）时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
+          "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a probe that did not verify the span (failed or not applicable). One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
         },
         "image": {
           "light": "/assets/presentation/architecture-light.svg",
           "dark": "/assets/presentation/architecture-dark.svg",
           "alt": {
-            "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针失败时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
-            "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
+            "zh": "guard/guard_async 读取或从端点获取 uncertainty，调用所选 Probe，然后构造 GateDecision。仅当 uncertainty > threshold 且探针未通过（失败或不适用）时 handoff；单信号触发为 abstain，双清为 proceed。返回值本身不停止调用方的 Agent。",
+            "en": "guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a probe that did not verify the span (failed or not applicable). One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent."
           },
           "mobile": {
             "light": "/assets/presentation/architecture-mobile-light.svg",
@@ -234,6 +234,10 @@
   },
   "limitations": [
     {
+      "zh": "探针没有可校验输入时记为不适用（如 schema 探针遇到无 schema 块的 span）：不会被当成通过，最多 abstain，高不确定度仍会 handoff。",
+      "en": "A probe with nothing to check is marked not applicable (e.g. the schema probe on a span with no schema block): it is not treated as a pass, so it can only abstain, and high uncertainty still hands off."
+    },
+    {
       "zh": "低不确定度且探针失败只会 abstain，不会自动 handoff；该 AND 策略不保证拦下所有错误。",
       "en": "A failed probe with low uncertainty only abstains, without automatic handoff; this AND policy does not catch every error."
     },
@@ -243,6 +247,6 @@
     }
   ],
   "footer": {
-    "tag": "0.9.0 · Python 3.10+ · MIT"
+    "tag": "0.10.0 · Python 3.10+ · MIT"
   }
 }

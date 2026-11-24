@@ -9,7 +9,7 @@
 
 **Produce proceed, abstain or handoff for each span, retaining probe evidence and the decision rationale.**
 
-`v0.9.0` · `Python 3.10+` · [MIT](LICENSE)
+`v0.10.0` · `Python 3.10+` · [MIT](LICENSE)
 
 [Website](https://probegate.lei6393.com) · [Demo record](docs/demo-results.json)
 
@@ -23,10 +23,10 @@ A step may be syntactically wrong yet confident, or merely express uncertainty. 
   <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="assets/presentation/architecture-mobile-dark.svg">
   <source media="(max-width: 640px)" srcset="assets/presentation/architecture-mobile-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="assets/presentation/architecture-dark.svg">
-  <img src="assets/presentation/architecture-light.svg" width="1000" alt="guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent.">
+  <img src="assets/presentation/architecture-light.svg" width="1000" alt="guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a probe that did not verify the span (failed or not applicable). One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent.">
 </picture>
 
-guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a failed probe. One signal produces abstain; neither produces proceed. Returning a decision does not itself stop the caller’s agent.
+guard/guard_async reads uncertainty or fetches it from an endpoint, runs the selected Probe and constructs GateDecision. handoff requires uncertainty > threshold and a probe that did not verify the span (failed or not applicable). One signal produces abstain; neither produces proceed. A probe with nothing to check is marked not applicable (not passed), so that span cannot proceed. Returning a decision does not itself stop the caller’s agent.
 
 Source entry points: [probegate/gate.py](probegate/gate.py) · [probegate/models.py](probegate/models.py) · [probegate/uncertainty.py](probegate/uncertainty.py) · [probegate/probes/compile_probe.py](probegate/probes/compile_probe.py) · [probegate/probes/test_probe.py](probegate/probes/test_probe.py) · [probegate/probes/lint_probe.py](probegate/probes/lint_probe.py) · [probegate/probes/schema_probe.py](probegate/probes/schema_probe.py) · [probegate/cli.py](probegate/cli.py)
 
@@ -124,6 +124,7 @@ CLI and Python API share decision models, and the UI can display per-span decisi
 
 Four probes, async evaluation, endpoint fetching and local UI are implemented. Team identity, hosted relays and broader calibration experiments remain future directions.
 
+- A probe with nothing to check is marked not applicable (e.g. the schema probe on a span with no schema block): it is not treated as a pass, so it can only abstain, and high uncertainty still hands off.
 - A failed probe with low uncertainty only abstains, without automatic handoff; this AND policy does not catch every error.
 - Passing syntax checks does not establish program correctness; logprobs or self-report do not establish calibrated correctness probabilities.
 
